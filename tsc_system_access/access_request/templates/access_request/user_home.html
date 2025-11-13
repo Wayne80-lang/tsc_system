@@ -1,0 +1,140 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>User Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+        }
+        nav.navbar {
+            margin: 0 !important;
+            padding: 0.75rem 1.25rem;
+            width: 100%;
+            position: fixed;   /* stays at the top */
+            top: 0;
+            left: 0;
+            z-index: 1000;
+        }
+        .page-content {
+            margin-top: 64px;  /* adjusted for taller navbar */
+            padding: 30px;      /* adds more breathing room inside */
+        }
+
+    </style>
+
+</head>
+<body class="bg-light p-4">
+   <nav class="navbar navbar-dark" style="background-color:#001F54;">
+  <div class="w-100 d-flex justify-content-between align-items-center">
+    
+    <!-- Left side -->
+    <div class="d-flex align-items-center">
+      <img src="{% static 'images/tsc_logo.jpeg' %}" alt="TSC Logo" width="40" height="40"
+           class="me-2"
+           onerror="this.style.display='none'; document.getElementById('fallback-logo').style.display='inline-block';">
+
+      <div id="fallback-logo" 
+           style="display:none; width:40px; height:40px; border-radius:50%; background:gold; color:navy;
+                  font-weight:bold; font-size:18px; line-height:40px; text-align:center; margin-right:10px;">
+        TSC
+      </div>
+
+      <span class="fw-bold text-light fs-5">Teachers Service Commission</span>
+    </div>
+
+    <!-- Right side -->
+    <div class="d-flex align-items-center">
+      <span class="text-light me-3">
+        👤 {{ request.user.full_name }}
+      </span>
+      <form method="post" action="{% url 'logout' %}" style="display:inline;">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-sm fw-bold"
+        style="background-color:#FFD700; color:#001F54; border-radius:6px;">
+         Logout
+    </button>
+</form>
+    </div>
+  </div>
+</nav>
+<div class="page-content">
+    <div class="container bg-white shadow-sm rounded p-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 style="color: navy;">👤 Welcome, {{ request.user.full_name }}</h2>
+        <a href="{% url 'submit_request' %}" class="btn btn-primary">➕ New Access Request</a>
+    </div>
+
+    {% for req in requests %}
+        <div class="card mb-4">
+            <div class="card-header bg-dark text-white">
+                Request #{{ req.id }} – {{ req.get_request_type_display }}
+                <span class="badge bg-secondary float-end">{{ req.submitted_at|date:"M d, Y H:i" }}</span>
+            </div>
+            <div class="card-body">
+                <table class="table table-bordered align-middle">
+                    <thead class="table-light">
+                        <tr>
+                            <th>System</th>
+                            <th>Level</th>
+                            <th>HOD Status</th>
+                            <th>ICT Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sys in req.requested_systems.all %}
+                        <tr>
+                            <td>{{ sys.get_system_display }}</td>
+                            <td>{{ sys.level_of_access }}</td>
+                            
+                            <!-- HOD Status -->
+                            <td>
+                                {% if sys.hod_status == "pending" %}
+                                    <span class="badge bg-warning text-dark">Pending</span>
+                                {% elif sys.hod_status == "approved" %}
+                                    <span class="badge bg-success">Approved</span>
+                                {% else %}
+                                    <span class="badge bg-danger">Rejected</span>
+                                {% endif %}
+                                {% if sys.hod_comment %}
+                                    <br><small class="text-muted">Reason: {{ sys.hod_comment }}</small>
+                                {% endif %}
+                                {% if sys.hod_decision_date %}
+                                    <br><small class="text-muted">On: {{ sys.hod_decision_date|date:"M d, Y H:i" }}</small>
+                                {% endif %}
+                            </td>
+
+                            <!-- ICT Status -->
+                            <td>
+                                {% if sys.ict_status == "pending" %}
+                                    <span class="badge bg-warning text-dark">Pending</span>
+                                {% elif sys.ict_status == "approved" %}
+                                    <span class="badge bg-success">Approved</span>
+                                {% else %}
+                                    <span class="badge bg-danger">Rejected</span>
+                                {% endif %}
+                                {% if sys.ict_comment %}
+                                    <br><small class="text-muted">Reason: {{ sys.ict_comment }}</small>
+                                {% endif %}
+                                {% if sys.ict_decision_date %}
+                                    <br><small class="text-muted">On: {{ sys.ict_decision_date|date:"M d, Y H:i" }}</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% empty %}
+        <p class="text-center">You have no submitted requests yet. 
+           <a href="{% url 'submit_request' %}" class="btn btn-outline-primary btn-sm ms-2">Create One</a>
+        </p>
+    {% endfor %}
+</div>
+</div>
+</body>
+</html>

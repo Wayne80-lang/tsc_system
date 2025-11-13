@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}System Admin Dashboard{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="text-primary">{{ system_name }} – System Admin Dashboard</h3>
+        <div>
+            <a href="{% url 'export_system_admin_data' 'csv' %}" class="btn btn-outline-primary btn-sm me-2">
+                ⬇️ Export CSV
+            </a>
+            <a href="{% url 'export_system_admin_data' 'pdf' %}" class="btn btn-outline-danger btn-sm">
+                📄 Export PDF
+            </a>
+        </div>
+    </div>
+
+    <!-- 🧾 Summary Cards -->
+    <div class="row text-center mb-4">
+        <div class="col-md-2 col-6 mb-2">
+            <div class="card shadow-sm border-0" style="background-color:#001F54; color:#FFD700;">
+                <div class="card-body">
+                    <h6>Total</h6>
+                    <h4>{{ total_requests }}</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6 mb-2">
+            <div class="card shadow-sm border-0 bg-warning text-dark">
+                <div class="card-body">
+                    <h6>Pending</h6>
+                    <h4>{{ pending_requests }}</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6 mb-2">
+            <div class="card shadow-sm border-0 bg-success text-white">
+                <div class="card-body">
+                    <h6>Approved</h6>
+                    <h4>{{ approved_requests }}</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6 mb-2">
+            <div class="card shadow-sm border-0 bg-danger text-white">
+                <div class="card-body">
+                    <h6>Rejected</h6>
+                    <h4>{{ rejected_requests }}</h4>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-2 col-6 mb-2">
+            <div class="card shadow-sm border-0 bg-info text-dark">
+                <div class="card-body">
+                    <h6>Today</h6>
+                    <h4>{{ today_requests }}</h4>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 🔍 Filters -->
+    <form method="get" class="row g-3 align-items-end mb-4">
+        <div class="col-md-4">
+            <label class="form-label fw-bold">Filter by Status</label>
+            <select name="status" class="form-select">
+                <option value="all" {% if status_filter == "all" %}selected{% endif %}>All</option>
+                <option value="pending" {% if status_filter == "pending" %}selected{% endif %}>Pending</option>
+                <option value="approved" {% if status_filter == "approved" %}selected{% endif %}>Approved</option>
+                <option value="rejected" {% if status_filter == "rejected" %}selected{% endif %}>Rejected</option>
+            </select>
+        </div>
+        <div class="col-md-4">
+            <label class="form-label fw-bold">Filter by Date</label>
+            <input type="date" name="date" value="{{ date_filter }}" class="form-control">
+        </div>
+        <div class="col-md-4 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary w-100" style="background-color:#001F54; border:none; color:#FFD700;">
+                Apply Filters
+            </button>
+        </div>
+    </form>
+
+    <a href="{% url 'system_admin_dashboard' %}" class="btn btn-secondary mb-4">Clear Filters</a>
+
+    <!-- 🧾 Requests Table -->
+    <div class="card shadow-sm">
+        <div class="card-header bg-dark text-light">
+            Pending System Requests
+        </div>
+        <div class="card-body">
+            <table class="table table-bordered table-striped align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Requester</th>
+                        <th>TSC No</th>
+                        <th>System</th>
+                        <th>Request Type</th>
+                        <th>Level</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for sys in requests %}
+                    <tr>
+                        <td>{{ sys.access_request.requester.full_name }}</td>
+                        <td>{{ sys.access_request.tsc_no }}</td>
+                        <td>{{ sys.get_system_display }}</td>
+                        <td>{{ sys.access_request.get_request_type_display }}</td>
+                        <td>{{ sys.level_of_access }}</td>
+                        <td>
+                            <form method="post" action="{% url 'system_admin_decision' sys.id %}" style="display:inline;">
+                                {% csrf_token %}
+                                <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
+                            </form>
+                            <button class="btn btn-danger btn-sm" data-bs-toggle="collapse" data-bs-target="#rejectForm{{ sys.id }}">Reject</button>
+                            <div id="rejectForm{{ sys.id }}" class="collapse mt-2">
+                                <form method="post" action="{% url 'system_admin_decision' sys.id %}">
+                                    {% csrf_token %}
+                                    <textarea name="comment" rows="2" class="form-control mb-1" placeholder="Reason for rejection..." required></textarea>
+                                    <button type="submit" name="action" value="reject" class="btn btn-warning btn-sm">Confirm Reject</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="6" class="text-center">No pending requests for your systems.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
