@@ -29,6 +29,48 @@ import csv
 from io import BytesIO
 from datetime import date
 from django.db.models import Q
+from django.db.models import Prefetch
+
+
+# --- HELPER: Centralized Status Logic ---
+def sync_request_status(request_obj):
+    """
+    Recalculates and saves the parent AccessRequest status based on its children.
+    Ensures overall status only changes if there are NO pending items for that stage.
+    """
+    all_systems = request_obj.requested_systems.all()
+    
+    # 1. Check HOD Phase
+    hod_pending = all_systems.filter(hod_status='pending').exists()
+    if hod_pending:
+        request_obj.status = 'pending_hod'
+        request_obj.save()
+        return
+
+    # 2. HOD Done - Check if anything was approved by HOD
+    hod_approved_exists = all_systems.filter(hod_status='approved').exists()
+    if not hod_approved_exists:
+        # HOD rejected everything (or no systems exists)
+        request_obj.status = 'rejected_hod'
+        request_obj.save()
+        return
+
+    # 3. Check ICT Phase (Only for items passed by HOD)
+    # We look for items that are Approved by HOD but Pending ICT
+    ict_pending = all_systems.filter(hod_status='approved', ict_status='pending').exists()
+    if ict_pending:
+        request_obj.status = 'pending_ict'
+        request_obj.save()
+        return
+
+    # 4. ICT Done - Check outcomes
+    ict_approved_exists = all_systems.filter(ict_status='approved').exists()
+    if ict_approved_exists:
+        request_obj.status = 'approved' # Overall Success (at least one system granted)
+    else:
+        request_obj.status = 'rejected_ict' # HOD approved some, but ICT rejected them all
+    
+    request_obj.save()
 
 
 
@@ -107,97 +149,82 @@ def hod_dashboard(request):
     return render(request, "access_request/hod_dashboard.html", context)
 
 
+# access_request/views.py
+
+# ... existing imports ...
+
 @login_required
 def hod_system_decision(request, system_id):
-    # Role & Scope Checks
+    # Role Check
     if not getattr(request.user, "userrole", None) or request.user.userrole.role != "hod":
         return HttpResponse(status=403, content="Access Denied")
 
     system = get_object_or_404(RequestedSystem, id=system_id)
     request_obj = system.access_request
     
-    # Check Authorization
-    is_authorized = HodAssignment.objects.filter(
-        hod_user=request.user, directorate=request_obj.directorate
-    ).exists()
-
+    # Auth Check
+    is_authorized = HodAssignment.objects.filter(hod_user=request.user, directorate=request_obj.directorate).exists()
     if not is_authorized:
-        # Fallback legacy check
         if not UserRole.objects.filter(hod=request.user, user=request_obj.requester).exists():
              return HttpResponse(status=403, content="Access Denied")
 
     if request.method == "POST":
         action = request.POST.get("action")
         comment = request.POST.get("comment", "")
-        sys_name = system.get_system_display() # Get name for the message
+        sys_name = system.get_system_display()
+
+        # ✅ ISSUE 1 FIX: Record the Actioned User
+        request_obj.hod_approver = request.user
+        request_obj.hod_decision_date = timezone.now()
+        # We save request_obj later in sync_request_status
 
         if action == "approve":
             system.hod_status = "approved"
             system.hod_comment = ""
             system.save()
-            # ✅ 1. Success Message
-            messages.success(request, f"✅ Approved access to {sys_name} for {request_obj.requester.full_name}.")
+            messages.success(request, f"✅ Approved {sys_name}.")
 
         elif action == "reject":
             system.hod_status = "rejected"
             system.hod_comment = comment
+            # ✅ ISSUE 3 FIX: Cascade rejection to System Admin
+            system.ict_status = "rejected"
+            system.sysadmin_status = "rejected"
             system.save()
-            # ✅ 2. Warning/Info Message
-            messages.warning(request, f"❌ Rejected access to {sys_name}. Reason recorded.")
+            messages.warning(request, f"❌ Rejected {sys_name}.")
 
-        # --- Completion Check Logic (Sends Emails) ---
+        # ✅ ISSUE 2 FIX: Use Centralized Logic for Overall Status
+        sync_request_status(request_obj)
+
+        # Check if HOD work is totally done for this request to send emails
         pending = request_obj.requested_systems.filter(hod_status="pending").exists()
-
         if not pending:
             approved_systems = request_obj.requested_systems.filter(hod_status="approved")
             rejected_systems = request_obj.requested_systems.filter(hod_status="rejected")
 
             approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
-            rejected_list = "\n".join(
-                [f"{s.get_system_display()} -> {s.hod_comment or 'No reason provided'}" for s in rejected_systems]
-            ) or "None"
+            rejected_list = "\n".join([f"{s.get_system_display()} ({s.hod_comment})" for s in rejected_systems]) or "None"
 
-            # Email to ICT
+            # Notify ICT
             send_mail(
                 subject="[TSC] New Access Request (HOD Review Completed)",
-                message=(
-                    f"Staff {request_obj.requester.full_name} ({request_obj.tsc_no}) has completed HOD review.\n\n"
-                    f"✅ Approved systems: {approved_list}\n\n"
-                    f"❌ Rejected systems:\n{rejected_list}\n\n"
-                    "Please log in to ICT Dashboard to process approved systems."
-                ),
+                message=f"Staff {request_obj.requester.full_name} ({request_obj.tsc_no}) review complete.\n\n✅ Approved: {approved_list}\n❌ Rejected: {rejected_list}",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[settings.ICT_TEAM_EMAIL],
             )
-
-            # Email to Staff
+            # Notify User
             send_mail(
                 subject="[TSC] Your Access Request – HOD Review Completed",
-                message=(
-                    f"Dear {request_obj.requester.full_name},\n\n"
-                    f"Your system access request has been reviewed by your HOD.\n\n"
-                    f"✅ Approved systems: {approved_list}\n\n"
-                    f"❌ Rejected systems:\n{rejected_list}\n\n"
-                    "Next step: If approved, your request will now move to ICT for final approval."
-                ),
+                message=f"Dear {request_obj.requester.full_name},\nHOD review complete.\n\n✅ Approved: {approved_list}\n❌ Rejected: {rejected_list}",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[request_obj.email],
             )
+            messages.info(request, "🏁 HOD review completed for this request.")
 
-            # Update Parent Status
-            if approved_systems.exists():
-                request_obj.status = "pending_ict"
-            else:
-                request_obj.status = "rejected_hod"
-            request_obj.save()
-            
-            # Optional: Add a message that the whole request is done
-            messages.info(request, f"🏁 Review completed for {request_obj.requester.full_name}. Emails sent.")
-
-        return redirect("hod_dashboard")
-    
     return redirect("hod_dashboard")
 
+
+# ... [Keep overall_admin_dashboard logic, but we rely on the Template change for the Export filtering] ...
 
 @login_required
 def ict_dashboard(request):
@@ -232,16 +259,20 @@ def approve_request(request, request_id):
 
 @login_required
 def ict_system_decision(request, system_id):
-    # role guard: only ICT may access
     if not getattr(request.user, "userrole", None) or request.user.userrole.role != "ict":
         return HttpResponse(status=403)
 
     system = get_object_or_404(RequestedSystem, id=system_id)
+    request_obj = system.access_request
 
     if request.method == "POST":
         action = request.POST.get("action")
         comment = request.POST.get("comment", "")
-
+        
+        # ✅ ISSUE 1 FIX: Record the Actioned User
+        request_obj.ict_approver = request.user
+        request_obj.ict_decision_date = timezone.now()
+        
         if action == "approve":
             system.ict_status = "approved"
             system.ict_comment = ""
@@ -254,57 +285,32 @@ def ict_system_decision(request, system_id):
             system.save()
             messages.warning(request, f"{system.get_system_display()} rejected.")
 
-        # ✅ Completion Check: Are there any pending systems left?
-        request_obj = system.access_request
-        # We check if any systems are still pending ICT approval (and were approved by HOD)
+        # ✅ ISSUE 2 FIX: Update Overall Status
+        sync_request_status(request_obj)
+
+        # Completion Check
         pending = request_obj.requested_systems.filter(ict_status="pending", hod_status="approved").exists()
-
-        if not pending:  
-            # 1. Gather results for the email
-            approved_systems = request_obj.requested_systems.filter(ict_status="approved", hod_status="approved")
-            rejected_systems = request_obj.requested_systems.filter(ict_status="rejected", hod_status="approved")
-
+        if not pending:
+            approved_systems = request_obj.requested_systems.filter(ict_status="approved")
+            rejected_systems = request_obj.requested_systems.filter(ict_status="rejected")
+            
             approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
-            rejected_list = "\n".join(
-                [f"{s.get_system_display()} -> {s.ict_comment or 'No reason provided'}" for s in rejected_systems]
-            ) or "None"
-
-            # 2. Safely build the CC list
+            rejected_list = "\n".join([f"{s.get_system_display()} ({s.ict_comment})" for s in rejected_systems]) or "None"
+            
             cc_list = []
-            # Check if directorate exists AND has an email before adding
             if request_obj.directorate and request_obj.directorate.hod_email:
                 cc_list.append(request_obj.directorate.hod_email)
 
-            subject = "[TSC] Your Access Request – ICT Review Completed"
-            body = (
-                f"Dear {request_obj.requester.full_name},\n\n"
-                f"Your system access request has now been reviewed by ICT.\n\n"
-                f"✅ Approved systems: {approved_list}\n\n"
-                f"❌ Rejected systems:\n{rejected_list}\n\n"
-                "Awaiting assignment of rights by admin. Please contact ICT if further clarification is needed."
-            )
-
-            # 3. Send Email
-            email = EmailMessage(
-                subject=subject,
-                body=body,
+            EmailMessage(
+                subject="[TSC] Your Access Request – ICT Review Completed",
+                body=f"Dear {request_obj.requester.full_name},\nICT review complete.\n\n✅ Approved: {approved_list}\n❌ Rejected: {rejected_list}",
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 to=[request_obj.email],
-                cc=cc_list,  # ✅ Uses the safe list we built above
-            )
-            email.send()
-
-            # 4. Update Parent Request Status
-            if approved_systems.exists():
-                request_obj.status = "approved"
-            else:
-                request_obj.status = "rejected_ict"
-            request_obj.save()
+                cc=cc_list
+            ).send()
             
-            messages.info(request, "🏁 Request processing completed. Final email sent.")
+            messages.info(request, "🏁 Request processing completed.")
 
-        return redirect("ict_dashboard")
-    
     return redirect("ict_dashboard")
 
 def reject_request(request, request_id):
@@ -581,149 +587,148 @@ def system_admin_decision(request, pk):
     return redirect('system_admin_dashboard')
 
 
-
 @login_required
 def overall_admin_dashboard(request):
-    # restrict to overall admin (or superuser)
-    try:
-        role = request.user.userrole.role
-    except UserRole.DoesNotExist:
-        role = 'staff'
-    if not (role == 'super_admin' or request.user.is_superuser):
+    # Security Check
+    if not request.user.is_superuser and getattr(request.user.userrole, 'role', '') != 'super_admin':
         return HttpResponse(status=403)
+
+    # --- FILTERING LOGIC ---
     status_filter = request.GET.get("status", "")
-    system_filter = request.GET.get("system", "")
-    date_filter = request.GET.get("date", "")
-    today_filter = request.GET.get("today", "")
+    tsc_filter = request.GET.get("tsc", "")
+    
+    # Get AccessRequests with their related systems
+    access_requests = AccessRequest.objects.all().select_related(
+        'requester', 'directorate', 'hod_approver', 'ict_approver'
+    ).prefetch_related('requested_systems').order_by('-submitted_at')
 
-    requests = RequestedSystem.objects.select_related("access_request", "access_request__requester")
-
+    if tsc_filter:
+        access_requests = access_requests.filter(tsc_no__icontains=tsc_filter)
+    
     if status_filter:
-        requests = requests.filter(ict_status=status_filter)
-    if system_filter:
-        requests = requests.filter(system=system_filter)
-    if date_filter:
-        requests = requests.filter(access_request__submitted_at__date=date_filter)
-    if today_filter:
-        requests = requests.filter(access_request__submitted_at__date=localdate())
+        # Filter parent if ANY child matches the status
+        access_requests = access_requests.filter(
+            Q(requested_systems__hod_status=status_filter) |
+            Q(requested_systems__ict_status=status_filter)
+        ).distinct()
 
-    total = RequestedSystem.objects.count()
-    pending = RequestedSystem.objects.filter(ict_status="sent_admin").count()
-    approved = RequestedSystem.objects.filter(ict_status="approved").count()
-    rejected = RequestedSystem.objects.filter(ict_status="rejected").count()
+    # --- EXPORT TO PDF (Using the filtered 'access_requests') ---
+    if "export_pdf" in request.GET:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=18)
+        elements = []
+        styles = getSampleStyleSheet()
 
-    # ✅ Export to Excel
+        # Header
+        elements.append(Paragraph("<b>Teachers Service Commission</b>", styles["Title"]))
+        elements.append(Paragraph(f"System Access Report (Generated: {datetime.now().strftime('%Y-%m-%d')})", styles["Normal"]))
+        elements.append(Spacer(1, 20))
+
+        # Table Data
+        data = [["Requester", "TSC No", "Directorate", "System", "HOD Status", "ICT Status"]]
+        
+        for req in access_requests:
+            for sys in req.requested_systems.all():
+                data.append([
+                    req.requester.full_name,
+                    req.tsc_no,
+                    req.directorate.name if req.directorate else "-",
+                    sys.get_system_display(),
+                    sys.hod_status.upper(),
+                    sys.ict_status.upper()
+                ])
+
+        # Table Styling
+        table = Table(data, colWidths=[120, 70, 120, 120, 80, 80])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.navy),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ]))
+        
+        elements.append(table)
+        doc.build(elements)
+        
+        buffer.seek(0)
+        return HttpResponse(buffer, content_type='application/pdf')
+
+    # --- EXPORT TO EXCEL ---
     if "export_excel" in request.GET:
         wb = Workbook()
         ws = wb.active
-        ws.title = "System Access Requests"
+        ws.title = "Access Requests"
+        ws.append(["Requester", "TSC No", "Directorate", "System", "HOD Status", "ICT Status", "Submitted At"])
 
-        headers = ["Requester", "TSC No", "System", "Request Type", "Status", "Submitted At"]
-        ws.append(headers)
-
-        for sys in requests:
-            ws.append([
-                sys.access_request.requester.full_name,
-                sys.access_request.tsc_no,
-                sys.get_system_display(),
-                sys.access_request.get_request_type_display(),
-                sys.ict_status.capitalize(),
-                sys.access_request.submitted_at.strftime("%Y-%m-%d %H:%M"),
-            ])
-
-        response = HttpResponse(
-            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        for req in access_requests:
+            for sys in req.requested_systems.all():
+                ws.append([
+                    req.requester.full_name,
+                    req.tsc_no,
+                    req.directorate.name if req.directorate else "-",
+                    sys.get_system_display(),
+                    sys.hod_status,
+                    sys.ict_status,
+                    req.submitted_at.strftime("%Y-%m-%d %H:%M")
+                ])
+        
+        response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         response["Content-Disposition"] = f'attachment; filename="TSC_Requests_{localdate()}.xlsx"'
         wb.save(response)
         return response
 
-    # ✅ Export to PDF
-    if "export_pdf" in request.GET:
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=36, rightMargin=36, topMargin=36, bottomMargin=36)
-        elements = []
+    # --- STANDARD RENDER ---
+    context = {
+        "access_requests": access_requests,
+        "total": RequestedSystem.objects.count(),
+    }
+    return render(request, "access_request/overall_admin_dashboard.html", context)
 
-        styles = getSampleStyleSheet()
-        title_style = styles["Title"]
-        title_style.textColor = colors.HexColor("#001F54")
-        subtitle_style = styles["Normal"]
-        subtitle_style.textColor = colors.HexColor("#001F54")
 
-        logo_path = os.path.join(settings.BASE_DIR, 'static/images/tsc_logo.jpeg')
-        header_row = []
-        if os.path.exists(logo_path):
-            header_row = [[Image(logo_path, width=48, height=68), Paragraph("<b>Teachers Service Commission</b><br/><font size=9>ICT System Access Requests</font>", subtitle_style)]]
-            header_tbl = Table(header_row, colWidths=[52, 450])
-            header_tbl.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ]))
-            elements.append(header_tbl)
-        else:
-            elements.append(Paragraph("<b>Teachers Service Commission</b>", title_style))
+@require_POST
+@login_required
+def overall_admin_override(request, sys_id):
+    if not request.user.is_superuser and getattr(request.user.userrole, 'role', '') != 'super_admin':
+        return HttpResponse(status=403)
 
-        elements.append(Spacer(1, 6))
-        # brand divider
-        divider = Table([[" "]], colWidths=[502])
-        divider.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#FFD700')),
-            ('LINEBELOW', (0, 0), (-1, -1), 1, colors.HexColor('#001F54')),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-        ]))
-        elements.append(divider)
-        elements.append(Spacer(1, 10))
+    system_request = get_object_or_404(RequestedSystem, id=sys_id)
+    request_obj = system_request.access_request
+    
+    target_stage = request.POST.get('stage')
+    new_status = request.POST.get('status')
+    comment = request.POST.get('comment', f"Overridden by {request.user.full_name}")
 
-        elements.append(Paragraph("TSC System Access Request Report", title_style))
-        elements.append(Spacer(1, 8))
-        elements.append(Paragraph("Generated on: " + localdate().strftime("%Y-%m-%d"), styles["Italic"]))
-        elements.append(Spacer(1, 12))
+    if target_stage == 'hod':
+        system_request.hod_status = new_status
+        system_request.hod_comment = comment
+        # ✅ ISSUE 1 FIX: Update Approver on Override
+        request_obj.hod_approver = request.user 
+        request_obj.hod_decision_date = timezone.now()
+        
+        # ✅ ISSUE 3 FIX: Cascade Reject
+        if new_status == 'rejected':
+            system_request.ict_status = 'rejected'
+            system_request.sysadmin_status = 'rejected'
+            
+    elif target_stage == 'ict':
+        system_request.ict_status = new_status
+        system_request.ict_comment = comment
+        request_obj.ict_approver = request.user
+        request_obj.ict_decision_date = timezone.now()
 
-        # Table Header
-        data = [["Requester", "TSC No", "System", "Type", "Status", "Date"]]
+    elif target_stage == 'sys_admin':
+        system_request.sysadmin_status = new_status
+        system_request.sysadmin_comment = comment
 
-        for sys in requests:
-            data.append([
-                sys.access_request.requester.full_name,
-                sys.access_request.tsc_no,
-                sys.get_system_display(),
-                sys.access_request.get_request_type_display(),
-                sys.ict_status.capitalize(),
-                sys.access_request.submitted_at.strftime("%Y-%m-%d"),
-            ])
+    system_request.save()
+    
+    # ✅ ISSUE 2 FIX: Sync Parent Status
+    sync_request_status(request_obj)
 
-        table = Table(data, repeatRows=1, colWidths=[120, 60, 110, 80, 60, 72])
-        table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#001F54")),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-            ('GRID', (0, 0), (-1, -1), 0.4, colors.HexColor('#9aa0a6')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.HexColor('#f1f3f4')]),
-        ]))
-
-        elements.append(table)
-        elements.append(Spacer(1, 10))
-        footer_note = Paragraph("Teachers Service Commission • ICT Directorate", subtitle_style)
-        elements.append(footer_note)
-        doc.build(elements)
-
-        buffer.seek(0)
-        return HttpResponse(buffer, content_type="application/pdf")
-
-    return render(request, "access_request/overall_admin_dashboard.html", {
-        "requests": requests,
-        "total": total,
-        "pending": pending,
-        "approved": approved,
-        "rejected": rejected,
-        "system_choices": RequestedSystem.SYSTEM_CHOICES,
-    })
+    messages.success(request, f"Override applied to {system_request.get_system_display()}.")
+    return redirect('overall_admin_dashboard')
 
 
 

@@ -1,179 +1,177 @@
-{% load static %}
 {% extends 'base.html' %}
+{% load static %}
+{% block title %}Overall Admin Dashboard{% endblock %}
+
 {% block content %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>ICT Dashboard</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-        }
-        nav.navbar {
-            margin: 0 !important;
-            padding: 0.5rem 1rem;
-            width: 100%;
-            position: fixed;   /* stays at the top */
-            top: 0;
-            left: 0;
-            z-index: 1000;
-        }
-        .page-content {
-            margin-top: 40px;  /*  adjust this value */
-            padding: 30px;      /* adds more breathing room inside */
-        }
-
-    </style>
-</head>
-<body class="bg-light p-4">
-    <nav class="navbar navbar-dark" style="background-color:#001F54;">
-  <div class="w-100 d-flex justify-content-between align-items-center">
-    
-    <!-- Left side -->
-    <div class="d-flex align-items-center">
-      <img src="{% static 'images/tsc_logo.jpeg' %}" alt="TSC Logo" width="40" height="40"
-           class="me-2"
-           onerror="this.style.display='none'; document.getElementById('fallback-logo').style.display='inline-block';">
-
-      <div id="fallback-logo" 
-           style="display:none; width:40px; height:40px; border-radius:50%; background:gold; color:navy;
-                  font-weight:bold; font-size:18px; line-height:40px; text-align:center; margin-right:10px;">
-        TSC
-      </div>
-
-      <span class="fw-bold text-light fs-5">Teachers Service Commission</span>
-    </div>
-
-    <!-- Right side -->
-    <div class="d-flex align-items-center">
-      <span class="text-light me-3">
-        👤 {{ request.user.full_name }}
-      </span>
-      <form method="post" action="{% url 'logout' %}" style="display:inline;">
-    {% csrf_token %}
-    <button type="submit" class="btn btn-sm fw-bold"
-        style="background-color:#FFD700; color:#001F54; border-radius:6px;">
-         Logout
-    </button>
-</form>
-
-    </div>
-  </div>
-</nav>
-
-
-<div class="container mt-4">
+<div class="container-fluid mt-4">
     <h2 class="mb-4 text-center" style="color: navy;">🏛️ Overall System Admin Dashboard</h2>
 
-    <!-- ✅ Summary Section -->
-    <div class="row text-center mb-4">
-        <div class="col-md-3">
-            <div class="card bg-primary text-light shadow-sm">
-                <div class="card-body">
-                    <h6>Total Requests</h6>
-                    <h3>{{ total }}</h3>
-                </div>
-            </div>
+    <form method="get" class="row g-3 mb-4 bg-white p-3 rounded shadow-sm">
+        <div class="col-md-4">
+            <input type="text" name="tsc" class="form-control" placeholder="Search by TSC Number..." value="{{ request.GET.tsc }}">
         </div>
-        <div class="col-md-3">
-            <div class="card bg-warning text-dark shadow-sm">
-                <div class="card-body">
-                    <h6>Pending</h6>
-                    <h3>{{ pending }}</h3>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card bg-success text-light shadow-sm">
-                <div class="card-body">
-                    <h6>Approved</h6>
-                    <h3>{{ approved }}</h3>
-                </div>
-            </div>
-        </div>
-        <div class="col-md-3">
-            <div class="card bg-danger text-light shadow-sm">
-                <div class="card-body">
-                    <h6>Rejected</h6>
-                    <h3>{{ rejected }}</h3>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ✅ Filter Controls -->
-    <form method="get" class="row g-3 mb-3">
         <div class="col-md-3">
             <select name="status" class="form-select">
                 <option value="">-- Filter by Status --</option>
-                <option value="sent_admin">Pending</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
+                <option value="pending" {% if request.GET.status == 'pending' %}selected{% endif %}>Pending</option>
+                <option value="approved" {% if request.GET.status == 'approved' %}selected{% endif %}>Approved</option>
+                <option value="rejected" {% if request.GET.status == 'rejected' %}selected{% endif %}>Rejected</option>
             </select>
         </div>
-        <div class="col-md-3">
-            <select name="system" class="form-select">
-                <option value="">-- Filter by System --</option>
-                {% for code, name in system_choices %}
-                    <option value="{{ code }}">{{ name }}</option>
-                {% endfor %}
-            </select>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100">Search</button>
         </div>
-        <div class="col-md-3">
-            <input type="date" name="date" class="form-control" />
-        </div>
-        <div class="col-md-3">
-            <button class="btn btn-primary w-100">Apply Filters</button>
+        <div class="col-md-3 text-end">
+             <a href="?{{ request.GET.urlencode }}&export_excel=1" class="btn btn-success btn-sm">📊 Export Excel</a>
+             <a href="?{{ request.GET.urlencode }}&export_pdf=1" class="btn btn-danger btn-sm ms-1">📄 Export PDF</a>
         </div>
     </form>
-    <div class="d-flex justify-content-end mb-3">
-        <a href="?export_excel=1" class="btn btn-success btn-sm me-2">📊 Export to Excel</a>
-        <a href="?export_pdf=1" class="btn btn-danger btn-sm">📄 Export to PDF</a>
-    </div>
 
-
-    <!-- ✅ Requests Table -->
     <div class="card shadow-sm">
         <div class="card-header bg-dark text-light">
-            All System Access Requests
+            Access Requests (Grouped by Staff)
         </div>
-        <div class="card-body">
-            <table class="table table-bordered table-striped align-middle">
-                <thead class="table-dark">
+        <div class="card-body p-0">
+            <table class="table table-hover mb-0 align-middle">
+                <thead class="table-light">
                     <tr>
-                        <th>Requester</th>
+                        <th style="width: 50px;"></th> <th>Requester Name</th>
                         <th>TSC No</th>
-                        <th>System</th>
-                        <th>Request Type</th>
-                        <th>Status</th>
-                        <th>Handled Date</th>
+                        <th>Directorate</th>
+                        <th>Designation</th>
+                        <th>Submitted At</th>
+                        <th>Overall Status</th>
                     </tr>
                 </thead>
                 <tbody>
-                {% for sys in requests %}
-                    <tr>
-                        <td>{{ sys.access_request.requester.full_name }}</td>
-                        <td>{{ sys.access_request.tsc_no }}</td>
-                        <td>{{ sys.get_system_display }}</td>
-                        <td>{{ sys.access_request.get_request_type_display }}</td>
+                {% for req in access_requests %}
+                    <tr class="fw-bold" style="background-color: #f8f9fa;">
                         <td>
-                            {% if sys.ict_status == 'approved' %}
-                                <span class="badge bg-success">Approved</span>
-                            {% elif sys.ict_status == 'rejected' %}
+                            <button class="btn btn-sm btn-outline-primary rounded-circle" type="button" 
+                                    data-bs-toggle="collapse" data-bs-target="#details-{{ req.id }}" 
+                                    aria-expanded="false">
+                                ➕
+                            </button>
+                        </td>
+                        <td>{{ req.requester.full_name }}</td>
+                        <td class="text-primary">{{ req.tsc_no }}</td>
+                        <td>{{ req.directorate.name|default:"-" }}</td>
+                        <td>{{ req.designation }}</td>
+                        <td>{{ req.submitted_at|date:"Y-m-d H:i" }}</td>
+                        <td>
+                            {% if req.status == 'approved' %}
+                                <span class="badge bg-success">Completed</span>
+                            {% elif 'rejected' in req.status %}
                                 <span class="badge bg-danger">Rejected</span>
-                            {% elif sys.ict_status == 'sent_admin' %}
-                                <span class="badge bg-warning text-dark">Pending</span>
+                            {% elif req.status == 'pending_hod' %}
+                                <span class="badge bg-warning text-dark">Pending HOD</span>
+                            {% elif req.status == 'pending_ict' %}
+                                <span class="badge bg-info text-dark">Pending ICT</span>
                             {% else %}
-                                <span class="badge bg-secondary">Unknown</span>
+                                <span class="badge bg-secondary">{{ req.get_status_display }}</span>
                             {% endif %}
                         </td>
-                        <td>{{ sys.access_request.submitted_at|date:"Y-m-d H:i" }}</td>
+                    </tr>
+
+                    <tr>
+                        <td colspan="7" class="p-0 border-0">
+                            <div class="collapse" id="details-{{ req.id }}">
+                                <div class="card card-body bg-light m-3 border shadow-sm">
+                                    <h6 class="text-muted border-bottom pb-2">
+                                        Request Details for {{ req.tsc_no }}
+                                    </h6>
+                                    
+                                    <div class="row mb-3 text-small">
+                                        <div class="col-md-6">
+                                            <strong>HOD Approver:</strong> 
+                                            {{ req.hod_approver.full_name|default:"Pending" }}
+                                            {% if req.hod_decision_date %}
+                                                <span class="text-muted">({{ req.hod_decision_date|date:"M d, H:i" }})</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="col-md-6">
+                                            <strong>ICT Approver:</strong> 
+                                            {{ req.ict_approver.full_name|default:"Pending" }}
+                                            {% if req.ict_decision_date %}
+                                                <span class="text-muted">({{ req.ict_decision_date|date:"M d, H:i" }})</span>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+
+                                    <table class="table table-sm table-bordered bg-white">
+                                        <thead class="table-secondary">
+                                            <tr>
+                                                <th>System Requested</th>
+                                                <th>Access Level</th>
+                                                <th>HOD Status</th>
+                                                <th>ICT Status</th>
+                                                <th>SysAdmin Status</th>
+                                                <th style="width: 200px;">Override Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for sys in req.requested_systems.all %}
+                                            <tr>
+                                                <td>{{ sys.get_system_display }}</td>
+                                                <td>{{ sys.level_of_access }}</td>
+                                                
+                                                <td>
+                                                    <span class="badge {% if sys.hod_status == 'approved' %}bg-success{% elif sys.hod_status == 'rejected' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                                                        {{ sys.hod_status|title }}
+                                                    </span>
+                                                    {% if sys.hod_comment %}<br><small class="text-muted">{{ sys.hod_comment }}</small>{% endif %}
+                                                </td>
+                                                <td>
+                                                    <span class="badge {% if sys.ict_status == 'approved' %}bg-success{% elif sys.ict_status == 'rejected' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                                                        {{ sys.ict_status|title }}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <span class="badge {% if sys.sysadmin_status == 'approved' %}bg-success{% elif sys.sysadmin_status == 'rejected' %}bg-danger{% else %}bg-warning text-dark{% endif %}">
+                                                        {{ sys.sysadmin_status|title }}
+                                                    </span>
+                                                </td>
+
+                                                <td>
+                                                    <div class="dropdown">
+                                                        <button class="btn btn-xs btn-dark dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                                                             Override
+                                                        </button>
+                                                        <div class="dropdown-menu p-3" style="width: 250px;">
+                                                            <form method="post" action="{% url 'overall_admin_override' sys.id %}">
+                                                                {% csrf_token %}
+                                                                <div class="mb-2">
+                                                                    <label class="form-label small fw-bold">Stage</label>
+                                                                    <select name="stage" class="form-select form-select-sm">
+                                                                        <option value="hod">HOD Level</option>
+                                                                        <option value="ict">ICT Level</option>
+                                                                        <option value="sys_admin">System Admin Level</option>
+                                                                    </select>
+                                                                </div>
+                                                                <div class="mb-2">
+                                                                    <label class="form-label small fw-bold">New Status</label>
+                                                                    <select name="status" class="form-select form-select-sm">
+                                                                        <option value="approved">Approve</option>
+                                                                        <option value="rejected">Reject</option>
+                                                                        <option value="pending">Reset to Pending</option>
+                                                                    </select>
+                                                                </div>
+                                                                <input type="text" name="comment" class="form-control form-control-sm mb-2" placeholder="Reason...">
+                                                                <button type="submit" class="btn btn-danger btn-sm w-100">Apply Override</button>
+                                                            </form>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </td>
                     </tr>
                 {% empty %}
-                    <tr><td colspan="6" class="text-center">No matching requests found.</td></tr>
+                    <tr><td colspan="7" class="text-center p-4">No access requests found.</td></tr>
                 {% endfor %}
                 </tbody>
             </table>
@@ -181,5 +179,3 @@
     </div>
 </div>
 {% endblock %}
-
-</body>

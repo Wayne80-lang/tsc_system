@@ -20,9 +20,8 @@ urlpatterns = [
     path("system-admin/decision/<int:pk>/", views.system_admin_decision, name="system_admin_decision"),
     path("overall-admin/dashboard/", views.overall_admin_dashboard, name="overall_admin_dashboard"),
     path("system-admin/export/<str:format>/", views.export_system_admin_data, name="export_system_admin_data"),
-
-
-
+    path("overall-admin/dashboard/", views.overall_admin_dashboard, name="overall_admin_dashboard"),
+    path("overall-admin/override/<int:sys_id>/", views.overall_admin_override, name="overall_admin_override"),
 
 
 
