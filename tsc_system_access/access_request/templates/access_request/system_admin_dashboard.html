@@ -2,134 +2,295 @@
 {% load static %}
 {% block title %}System Admin Dashboard{% endblock %}
 
+{% block extra_head %}
+<style>
+    /* Toggle Icons */
+    .btn-toggle-details[aria-expanded="true"] .icon-plus { display: none; }
+    .btn-toggle-details[aria-expanded="false"] .icon-minus { display: none; }
+    
+    /* Clean Button */
+    .btn-icon-clean {
+        border: none; background: transparent; color: #001F54;
+        width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+        padding: 0; border-radius: 50%; transition: background-color 0.2s;
+    }
+    .btn-icon-clean:hover { background-color: #e9ecef; }
+
+    .comment-section { display: none; }
+    
+    /* Tabs */
+    .nav-tabs .nav-link { color: #001F54; font-weight: 600; }
+    .nav-tabs .nav-link.active { background-color: #001F54; color: #FFD700; border-color: #001F54; }
+    
+    #toast-container { position: fixed; top: 80px; right: 20px; z-index: 9999; }
+</style>
+{% endblock %}
+
 {% block content %}
-<div class="container mt-4">
+<div id="toast-container"></div>
+
+<div class="container-fluid mt-4">
     <div class="d-flex justify-content-between align-items-center mb-3">
         <h3 class="text-primary">{{ system_name }} – System Admin Dashboard</h3>
-        <div>
-            <a href="{% url 'export_system_admin_data' 'csv' %}" class="btn btn-outline-primary btn-sm me-2">
-                ⬇️ Export CSV
-            </a>
-            <a href="{% url 'export_system_admin_data' 'pdf' %}" class="btn btn-outline-danger btn-sm">
-                📄 Export PDF
-            </a>
-        </div>
     </div>
 
-    <!-- 🧾 Summary Cards -->
     <div class="row text-center mb-4">
         <div class="col-md-2 col-6 mb-2">
             <div class="card shadow-sm border-0" style="background-color:#001F54; color:#FFD700;">
-                <div class="card-body">
-                    <h6>Total</h6>
-                    <h4>{{ total_requests }}</h4>
-                </div>
+                <div class="card-body p-2"><h6>Total</h6><h4>{{ total_requests }}</h4></div>
             </div>
         </div>
         <div class="col-md-2 col-6 mb-2">
             <div class="card shadow-sm border-0 bg-warning text-dark">
-                <div class="card-body">
-                    <h6>Pending</h6>
-                    <h4>{{ pending_requests }}</h4>
-                </div>
+                <div class="card-body p-2"><h6>Pending</h6><h4>{{ pending_requests }}</h4></div>
             </div>
         </div>
         <div class="col-md-2 col-6 mb-2">
             <div class="card shadow-sm border-0 bg-success text-white">
-                <div class="card-body">
-                    <h6>Approved</h6>
-                    <h4>{{ approved_requests }}</h4>
-                </div>
+                <div class="card-body p-2"><h6>Approved</h6><h4>{{ approved_requests }}</h4></div>
             </div>
         </div>
         <div class="col-md-2 col-6 mb-2">
             <div class="card shadow-sm border-0 bg-danger text-white">
-                <div class="card-body">
-                    <h6>Rejected</h6>
-                    <h4>{{ rejected_requests }}</h4>
-                </div>
+                <div class="card-body p-2"><h6>Rejected</h6><h4>{{ rejected_requests }}</h4></div>
             </div>
         </div>
         <div class="col-md-2 col-6 mb-2">
             <div class="card shadow-sm border-0 bg-info text-dark">
-                <div class="card-body">
-                    <h6>Today</h6>
-                    <h4>{{ today_requests }}</h4>
-                </div>
+                <div class="card-body p-2"><h6>Today</h6><h4>{{ today_requests }}</h4></div>
             </div>
         </div>
     </div>
 
-    <!-- 🔍 Filters -->
-    <form method="get" class="row g-3 align-items-end mb-4">
+    <form method="get" class="row g-3 mb-4 bg-white p-3 rounded shadow-sm align-items-end">
+        <input type="hidden" name="active_tab" id="id_active_tab" value="{{ active_tab }}">
+        
         <div class="col-md-4">
-            <label class="form-label fw-bold">Filter by Status</label>
-            <select name="status" class="form-select">
-                <option value="all" {% if status_filter == "all" %}selected{% endif %}>All</option>
-                <option value="pending" {% if status_filter == "pending" %}selected{% endif %}>Pending</option>
-                <option value="approved" {% if status_filter == "approved" %}selected{% endif %}>Approved</option>
-                <option value="rejected" {% if status_filter == "rejected" %}selected{% endif %}>Rejected</option>
-            </select>
+            <label class="form-label small fw-bold text-muted">Search Staff</label>
+            <input type="text" name="tsc" class="form-control" placeholder="TSC Number..." value="{{ request.GET.tsc }}">
         </div>
-        <div class="col-md-4">
-            <label class="form-label fw-bold">Filter by Date</label>
-            <input type="date" name="date" value="{{ date_filter }}" class="form-control">
+        <div class="col-md-2">
+            <label class="form-label small fw-bold text-muted">From</label>
+            <input type="date" name="start_date" class="form-control" value="{{ request.GET.start_date }}">
         </div>
-        <div class="col-md-4 d-flex align-items-end">
-            <button type="submit" class="btn btn-primary w-100" style="background-color:#001F54; border:none; color:#FFD700;">
-                Apply Filters
-            </button>
+        <div class="col-md-2">
+            <label class="form-label small fw-bold text-muted">To</label>
+            <input type="date" name="end_date" class="form-control" value="{{ request.GET.end_date }}">
+        </div>
+        <div class="col-md-2">
+            <button class="btn btn-primary w-100" style="background-color: #001F54;">Filter</button>
+        </div>
+        <div class="col-md-2 d-flex justify-content-end">
+             <a href="?{{ request.GET.urlencode }}&export_excel=1" class="btn btn-success btn-sm me-1" title="Export Excel"><i class="bi bi-file-earmark-excel"></i> XLS</a>
+             <a href="?{{ request.GET.urlencode }}&export_pdf=1" class="btn btn-danger btn-sm" title="Export PDF"><i class="bi bi-file-earmark-pdf"></i> PDF</a>
         </div>
     </form>
 
-    <a href="{% url 'system_admin_dashboard' %}" class="btn btn-secondary mb-4">Clear Filters</a>
+    <ul class="nav nav-tabs mb-3" id="sysTab" role="tablist">
+        <li class="nav-item">
+            <button class="nav-link {% if active_tab == 'pending' %}active{% endif %}" 
+                    id="pending-tab" data-bs-toggle="tab" data-bs-target="#pending" type="button"
+                    onclick="setActiveTab('pending')">
+                ⏳ Pending Actions
+                {% if pending_requests > 0 %}<span class="badge bg-danger rounded-pill ms-1">{{ pending_requests }}</span>{% endif %}
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link {% if active_tab == 'history' %}active{% endif %}" 
+                    id="history-tab" data-bs-toggle="tab" data-bs-target="#history" type="button"
+                    onclick="setActiveTab('history')">
+                📜 History
+            </button>
+        </li>
+    </ul>
 
-    <!-- 🧾 Requests Table -->
-    <div class="card shadow-sm">
-        <div class="card-header bg-dark text-light">
-            Pending System Requests
+    <div class="tab-content">
+        
+        <div class="tab-pane fade {% if active_tab == 'pending' %}show active{% endif %}" id="pending">
+            <div class="card shadow-sm">
+                <div class="card-header bg-dark text-light">Pending Requests</div>
+                <div class="card-body p-0">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 50px;"></th> <th>Requester</th> <th>TSC No</th> <th>Designation</th> <th>Submitted</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for req in requests %}
+                            <tr class="fw-bold" style="background-color: #f8f9fa;">
+                                <td>
+                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" data-bs-toggle="collapse" data-bs-target="#details-{{ req.id }}">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-plus-circle-fill icon-plus" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3v-3z"/></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-dash-circle-fill icon-minus" viewBox="0 0 16 16" style="color: #dc3545;"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7z"/></svg>
+                                    </button>
+                                </td>
+                                <td>{{ req.requester.full_name }}</td>
+                                <td class="text-primary">{{ req.tsc_no }}</td>
+                                <td>{{ req.designation }}</td>
+                                <td>{{ req.submitted_at|date:"Y-m-d H:i" }}</td>
+                            </tr>
+                            <tr>
+                                <td colspan="5" class="p-0 border-0">
+                                    <div class="collapse" id="details-{{ req.id }}">
+                                        <div class="card card-body bg-light m-3 border shadow-sm">
+                                            <table class="table table-sm table-bordered bg-white">
+                                                <thead class="table-secondary">
+                                                    <tr><th>System</th> <th>Access Level</th> <th>Action</th></tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for sys in req.requested_systems.all %}
+                                                        {% if sys.sysadmin_status == 'pending' %}
+                                                        <tr>
+                                                            <td>{{ sys.get_system_display }}</td>
+                                                            <td>{{ sys.level_of_access }}</td>
+                                                            <td>
+                                                                <div class="dropdown">
+                                                                    <button class="btn btn-sm btn-dark dropdown-toggle" type="button" 
+                                                                            data-bs-toggle="dropdown" 
+                                                                            data-bs-boundary="viewport" 
+                                                                            data-bs-auto-close="outside">
+                                                                        Action
+                                                                    </button>
+                                                                    <div class="dropdown-menu p-3 shadow" style="width: 280px;">
+                                                                        <form method="post" action="{% url 'system_admin_decision' sys.id %}?{{ request.GET.urlencode }}">
+                                                                            {% csrf_token %}
+                                                                            <div class="mb-2">
+                                                                                <label class="small fw-bold">Decision</label>
+                                                                                <select name="action" class="form-select form-select-sm decision-select">
+                                                                                    <option value="approve">Grant Access</option>
+                                                                                    <option value="reject">Reject</option>
+                                                                                </select>
+                                                                            </div>
+                                                                            <div class="mb-2 comment-section">
+                                                                                <label class="small fw-bold">Reason</label>
+                                                                                <textarea name="comment" rows="2" class="form-control form-control-sm" placeholder="Reason..."></textarea>
+                                                                            </div>
+                                                                            <button type="submit" class="btn btn-primary btn-sm w-100 action-btn">Confirm</button>
+                                                                        </form>
+                                                                    </div>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                        {% endif %}
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="5" class="text-center p-4">No pending requests for {{ system_name }}.</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        <div class="card-body">
-            <table class="table table-bordered table-striped align-middle">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Requester</th>
-                        <th>TSC No</th>
-                        <th>System</th>
-                        <th>Request Type</th>
-                        <th>Level</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                {% for sys in requests %}
-                    <tr>
-                        <td>{{ sys.access_request.requester.full_name }}</td>
-                        <td>{{ sys.access_request.tsc_no }}</td>
-                        <td>{{ sys.get_system_display }}</td>
-                        <td>{{ sys.access_request.get_request_type_display }}</td>
-                        <td>{{ sys.level_of_access }}</td>
-                        <td>
-                            <form method="post" action="{% url 'system_admin_decision' sys.id %}" style="display:inline;">
-                                {% csrf_token %}
-                                <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
-                            </form>
-                            <button class="btn btn-danger btn-sm" data-bs-toggle="collapse" data-bs-target="#rejectForm{{ sys.id }}">Reject</button>
-                            <div id="rejectForm{{ sys.id }}" class="collapse mt-2">
-                                <form method="post" action="{% url 'system_admin_decision' sys.id %}">
-                                    {% csrf_token %}
-                                    <textarea name="comment" rows="2" class="form-control mb-1" placeholder="Reason for rejection..." required></textarea>
-                                    <button type="submit" name="action" value="reject" class="btn btn-warning btn-sm">Confirm Reject</button>
-                                </form>
-                            </div>
-                        </td>
-                    </tr>
-                {% empty %}
-                    <tr><td colspan="6" class="text-center">No pending requests for your systems.</td></tr>
-                {% endfor %}
-                </tbody>
-            </table>
+
+        <div class="tab-pane fade {% if active_tab == 'history' %}show active{% endif %}" id="history">
+            <div class="card shadow-sm">
+                <div class="card-header bg-secondary text-white">My Approval History</div>
+                <div class="card-body p-0">
+                    <table class="table table-hover mb-0 align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 50px;"></th> <th>Requester</th> <th>TSC No</th> <th>Submitted</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for req in history %}
+                            <tr class="fw-bold" style="background-color: #e2e3e5;">
+                                <td>
+                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" data-bs-toggle="collapse" data-bs-target="#hist-{{ req.id }}">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-plus-circle-fill icon-plus" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3v-3z"/></svg>
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-dash-circle-fill icon-minus" viewBox="0 0 16 16" style="color: #dc3545;"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7z"/></svg>
+                                    </button>
+                                </td>
+                                <td>{{ req.requester.full_name }}</td>
+                                <td class="text-primary">{{ req.tsc_no }}</td>
+                                <td>{{ req.submitted_at|date:"Y-m-d H:i" }}</td>
+                            </tr>
+                            <tr>
+                                <td colspan="5" class="p-0 border-0">
+                                    <div class="collapse" id="hist-{{ req.id }}">
+                                        <div class="card card-body bg-light m-3 border shadow-sm">
+                                            <table class="table table-sm table-bordered bg-white">
+                                                <thead class="table-secondary">
+                                                    <tr><th>System</th> <th>Level</th> <th>Decision</th> <th>Date</th> <th>Comment</th></tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for sys in req.requested_systems.all %}
+                                                        {% if sys.system_admin == request.user %}
+                                                        <tr>
+                                                            <td>{{ sys.get_system_display }}</td>
+                                                            <td>{{ sys.level_of_access }}</td>
+                                                            <td>
+                                                                {% if sys.sysadmin_status == 'approved' %}
+                                                                    <span class="badge bg-success">Granted</span>
+                                                                {% else %}
+                                                                    <span class="badge bg-danger">Rejected</span>
+                                                                {% endif %}
+                                                            </td>
+                                                            <td>{{ sys.sysadmin_decision_date|date:"M d, Y H:i" }}</td>
+                                                            <td><small class="text-muted">{{ sys.sysadmin_comment|default:"-" }}</small></td>
+                                                        </tr>
+                                                        {% endif %}
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="5" class="text-center p-4">No history found.</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function setActiveTab(tabName) {
+        document.getElementById('id_active_tab').value = tabName;
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        const selects = document.querySelectorAll(".decision-select");
+        selects.forEach(select => {
+            select.addEventListener("change", function() {
+                const form = this.closest("form");
+                const commentSection = form.querySelector(".comment-section");
+                const textarea = commentSection.querySelector("textarea");
+                const btn = form.querySelector(".action-btn");
+
+                if (this.value === "reject") {
+                    commentSection.style.display = "block";
+                    textarea.setAttribute("required", "true");
+                    btn.classList.remove("btn-primary");
+                    btn.style.backgroundColor = "#FFD700"; 
+                    btn.style.borderColor = "#FFD700";
+                    btn.style.color = "#001F54";
+                    btn.textContent = "Confirm Reject";
+                } else {
+                    commentSection.style.display = "none";
+                    textarea.removeAttribute("required");
+                    btn.style.backgroundColor = ""; 
+                    btn.style.borderColor = "";
+                    btn.style.color = "";
+                    btn.classList.add("btn-primary");
+                    btn.textContent = "Confirm";
+                }
+            });
+            select.dispatchEvent(new Event("change"));
+        });
+    });
+</script>
 {% endblock %}
