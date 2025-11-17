@@ -63,7 +63,9 @@
 </nav>
     <div class="page-content">
         <div class="container bg-white shadow-sm rounded p-4">
-        <h2 class="mb-4" style="color: navy;">🏢 HOD Approval Dashboard</h2>
+        <h2 class="mb-4" style="color: navy;">
+    🏢 {% if hod_directorate %}{{ hod_directorate.name }} {% endif %}HOD Dashboard
+</h2>
 
         <!-- ✅ Flash messages -->
         {% if messages %}
@@ -84,32 +86,28 @@
             </tr>
         </thead>
         <tbody>
-        {% for req in requests %}
-            {% for sys in req.requested_systems.all %}
+            {% for sys in requests %}
                 {% if sys.hod_status == "pending" %}
                 <tr>
-                    <td>{{ req.requester.full_name }}</td>
-                    <td>{{ req.tsc_no }}</td>
+                    <td>{{ sys.access_request.requester.full_name }}</td>
+                    <td>{{ sys.access_request.tsc_no }}</td>
                     <td>
                         <span class="badge" style="background-color: navy; color: gold;">
                             {{ sys.get_system_display }}
                         </span>
                     </td>
-                    <td>{{ req.get_request_type_display }}</td>
+                    <td>{{ sys.access_request.get_request_type_display }}</td>
                     <td>{{ sys.level_of_access }}</td>
                     <td>
-                        <!-- Approve button -->
                         <form method="post" action="{% url 'hod_system_decision' sys.id %}" style="display:inline;">
                             {% csrf_token %}
                             <button type="submit" name="action" value="approve" class="btn btn-success btn-sm">Approve</button>
                         </form>
 
-                        <!-- Reject collapsible -->
                         <button class="btn btn-danger btn-sm" data-bs-toggle="collapse" data-bs-target="#rejectForm{{ sys.id }}">
                             Reject
                         </button>
 
-                        <!-- Hidden reject form -->
                         <div id="rejectForm{{ sys.id }}" class="collapse mt-2">
                             <form method="post" action="{% url 'hod_system_decision' sys.id %}">
                                 {% csrf_token %}
@@ -120,11 +118,10 @@
                     </td>
                 </tr>
                 {% endif %}
+            {% empty %}
+                <tr><td colspan="6" class="text-center">No requests pending HOD approval.</td></tr>
             {% endfor %}
-        {% empty %}
-            <tr><td colspan="6" class="text-center">No requests pending HOD approval.</td></tr>
-        {% endfor %}
-        </tbody>
+            </tbody>
 </table>
     </div>
     </div>

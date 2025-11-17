@@ -24,7 +24,7 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
 from reportlab.lib.styles import getSampleStyleSheet
 from django.templatetags.static import static
-from .models import RequestedSystem
+from .models import RequestedSystem,HodAssignment
 import csv
 from io import BytesIO
 from datetime import date
@@ -73,29 +73,31 @@ def request_form_view(request):
 
     return render(request, 'access_request/request_form.html', {'form': form})
 
+
 @login_required
 def hod_dashboard(request):
-    """HOD dashboard fetching requests per system from RequestedSystem."""
+    """HOD dashboard fetching only PENDING requests."""
     user = request.user
+    directorate = None
 
-    # 1️⃣ Get HOD's directorate
-    try:
-        directorate = user.directorate  # or user.profile.directorate depending on your setup
-    except AttributeError:
-        messages.error(request, "No directorate found for your account.")
-        directorate = None
+    # 1. Get Directorate from Assignment or Profile
+    assignment = user.hod_roles.first()  # Check HodAssignment table
+    if assignment:
+        directorate = assignment.directorate
+    
+    if not directorate:
+        directorate = getattr(user, 'directorate', None)
 
-    # 2️⃣ Fetch all requests visible to this HOD
+    # 2. Fetch ONLY pending requests
+    # This ensures the list is empty when all work is done
     if directorate:
         requests = RequestedSystem.objects.filter(
-            access_request__directorate=directorate
+            access_request__directorate=directorate,
+            hod_status="pending"  # <--- FILTER ADDED HERE
         ).select_related("access_request", "access_request__requester")
     else:
         requests = RequestedSystem.objects.none()
-
-    # 🧪 Temporary debug info in logs
-    print(f"[DEBUG] HOD: {user.full_name} | Directorate: {directorate}")
-    print(f"[DEBUG] Found {requests.count()} requests for this HOD")
+        messages.error(request, "No directorate assignment found for your account.")
 
     context = {
         "requests": requests,
@@ -103,6 +105,98 @@ def hod_dashboard(request):
         "user": user,
     }
     return render(request, "access_request/hod_dashboard.html", context)
+
+
+@login_required
+def hod_system_decision(request, system_id):
+    # Role & Scope Checks
+    if not getattr(request.user, "userrole", None) or request.user.userrole.role != "hod":
+        return HttpResponse(status=403, content="Access Denied")
+
+    system = get_object_or_404(RequestedSystem, id=system_id)
+    request_obj = system.access_request
+    
+    # Check Authorization
+    is_authorized = HodAssignment.objects.filter(
+        hod_user=request.user, directorate=request_obj.directorate
+    ).exists()
+
+    if not is_authorized:
+        # Fallback legacy check
+        if not UserRole.objects.filter(hod=request.user, user=request_obj.requester).exists():
+             return HttpResponse(status=403, content="Access Denied")
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        comment = request.POST.get("comment", "")
+        sys_name = system.get_system_display() # Get name for the message
+
+        if action == "approve":
+            system.hod_status = "approved"
+            system.hod_comment = ""
+            system.save()
+            # ✅ 1. Success Message
+            messages.success(request, f"✅ Approved access to {sys_name} for {request_obj.requester.full_name}.")
+
+        elif action == "reject":
+            system.hod_status = "rejected"
+            system.hod_comment = comment
+            system.save()
+            # ✅ 2. Warning/Info Message
+            messages.warning(request, f"❌ Rejected access to {sys_name}. Reason recorded.")
+
+        # --- Completion Check Logic (Sends Emails) ---
+        pending = request_obj.requested_systems.filter(hod_status="pending").exists()
+
+        if not pending:
+            approved_systems = request_obj.requested_systems.filter(hod_status="approved")
+            rejected_systems = request_obj.requested_systems.filter(hod_status="rejected")
+
+            approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
+            rejected_list = "\n".join(
+                [f"{s.get_system_display()} -> {s.hod_comment or 'No reason provided'}" for s in rejected_systems]
+            ) or "None"
+
+            # Email to ICT
+            send_mail(
+                subject="[TSC] New Access Request (HOD Review Completed)",
+                message=(
+                    f"Staff {request_obj.requester.full_name} ({request_obj.tsc_no}) has completed HOD review.\n\n"
+                    f"✅ Approved systems: {approved_list}\n\n"
+                    f"❌ Rejected systems:\n{rejected_list}\n\n"
+                    "Please log in to ICT Dashboard to process approved systems."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[settings.ICT_TEAM_EMAIL],
+            )
+
+            # Email to Staff
+            send_mail(
+                subject="[TSC] Your Access Request – HOD Review Completed",
+                message=(
+                    f"Dear {request_obj.requester.full_name},\n\n"
+                    f"Your system access request has been reviewed by your HOD.\n\n"
+                    f"✅ Approved systems: {approved_list}\n\n"
+                    f"❌ Rejected systems:\n{rejected_list}\n\n"
+                    "Next step: If approved, your request will now move to ICT for final approval."
+                ),
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[request_obj.email],
+            )
+
+            # Update Parent Status
+            if approved_systems.exists():
+                request_obj.status = "pending_ict"
+            else:
+                request_obj.status = "rejected_hod"
+            request_obj.save()
+            
+            # Optional: Add a message that the whole request is done
+            messages.info(request, f"🏁 Review completed for {request_obj.requester.full_name}. Emails sent.")
+
+        return redirect("hod_dashboard")
+    
+    return redirect("hod_dashboard")
 
 
 @login_required
@@ -134,6 +228,84 @@ def approve_request(request, request_id):
     )
 
     return redirect('hod_dashboard')
+
+
+@login_required
+def ict_system_decision(request, system_id):
+    # role guard: only ICT may access
+    if not getattr(request.user, "userrole", None) or request.user.userrole.role != "ict":
+        return HttpResponse(status=403)
+
+    system = get_object_or_404(RequestedSystem, id=system_id)
+
+    if request.method == "POST":
+        action = request.POST.get("action")
+        comment = request.POST.get("comment", "")
+
+        if action == "approve":
+            system.ict_status = "approved"
+            system.ict_comment = ""
+            system.save()
+            messages.success(request, f"{system.get_system_display()} approved.")
+
+        elif action == "reject":
+            system.ict_status = "rejected"
+            system.ict_comment = comment
+            system.save()
+            messages.warning(request, f"{system.get_system_display()} rejected.")
+
+        # ✅ Completion Check: Are there any pending systems left?
+        request_obj = system.access_request
+        # We check if any systems are still pending ICT approval (and were approved by HOD)
+        pending = request_obj.requested_systems.filter(ict_status="pending", hod_status="approved").exists()
+
+        if not pending:  
+            # 1. Gather results for the email
+            approved_systems = request_obj.requested_systems.filter(ict_status="approved", hod_status="approved")
+            rejected_systems = request_obj.requested_systems.filter(ict_status="rejected", hod_status="approved")
+
+            approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
+            rejected_list = "\n".join(
+                [f"{s.get_system_display()} -> {s.ict_comment or 'No reason provided'}" for s in rejected_systems]
+            ) or "None"
+
+            # 2. Safely build the CC list
+            cc_list = []
+            # Check if directorate exists AND has an email before adding
+            if request_obj.directorate and request_obj.directorate.hod_email:
+                cc_list.append(request_obj.directorate.hod_email)
+
+            subject = "[TSC] Your Access Request – ICT Review Completed"
+            body = (
+                f"Dear {request_obj.requester.full_name},\n\n"
+                f"Your system access request has now been reviewed by ICT.\n\n"
+                f"✅ Approved systems: {approved_list}\n\n"
+                f"❌ Rejected systems:\n{rejected_list}\n\n"
+                "Awaiting assignment of rights by admin. Please contact ICT if further clarification is needed."
+            )
+
+            # 3. Send Email
+            email = EmailMessage(
+                subject=subject,
+                body=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                to=[request_obj.email],
+                cc=cc_list,  # ✅ Uses the safe list we built above
+            )
+            email.send()
+
+            # 4. Update Parent Request Status
+            if approved_systems.exists():
+                request_obj.status = "approved"
+            else:
+                request_obj.status = "rejected_ict"
+            request_obj.save()
+            
+            messages.info(request, "🏁 Request processing completed. Final email sent.")
+
+        return redirect("ict_dashboard")
+    
+    return redirect("ict_dashboard")
 
 def reject_request(request, request_id):
     if request.method == 'POST':
@@ -222,8 +394,11 @@ def ict_reject(request, pk):
 
 @login_required
 def home_redirect(request):
-    profile = getattr(request.user, "profile", None)
-    if not profile:
+    # ✅ FIX: Check 'userrole' instead of 'profile'
+    try:
+        user_role = request.user.userrole
+    except UserRole.DoesNotExist:
+        # Fallback if no role is assigned
         return redirect("user_home")
 
     role_map = {
@@ -231,10 +406,10 @@ def home_redirect(request):
         "hod": "hod_dashboard",
         "ict": "ict_dashboard",
         "sys_admin": "system_admin_dashboard",
-        "super_admin": "super_admin_dashboard",
+        "super_admin": "overall_admin_dashboard", # Updated to match your URL name
     }
 
-    return redirect(role_map.get(profile.role, "user_home"))
+    return redirect(role_map.get(user_role.role, "user_home"))
 
 
 
@@ -288,156 +463,6 @@ def submit_request(request):
     return render(request, 'access_request/request_form.html', {'form': form})
 
 
-
-
-
-
-
-
-@login_required
-def hod_system_decision(request, system_id):
-    # role guard: only HODs may access
-    if not getattr(request.user, "userrole", None) or request.user.userrole.role != "hod":
-        return HttpResponse(status=403)
-
-    system = get_object_or_404(RequestedSystem, id=system_id)
-
-    # scope guard: only HOD for the requester may act
-    if not UserRole.objects.filter(hod=request.user, user=system.access_request.requester, role="staff").exists():
-        return HttpResponse(status=403)
-
-    if request.method == "POST":
-        action = request.POST.get("action")
-        comment = request.POST.get("comment", "")
-
-        if action == "approve":
-            system.hod_status = "approved"
-            system.hod_comment = ""
-            system.save()
-
-        elif action == "reject":
-            system.hod_status = "rejected"
-            system.hod_comment = comment
-            system.save()
-
-        # ✅ After every action → check if all systems are processed
-        request_obj = system.access_request
-        pending = request_obj.requested_systems.filter(hod_status="pending").exists()
-
-        if not pending:
-            approved_systems = request_obj.requested_systems.filter(hod_status="approved")
-            rejected_systems = request_obj.requested_systems.filter(hod_status="rejected")
-
-            approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
-            rejected_list = "\n".join(
-                [f"{s.get_system_display()} → {s.hod_comment or 'No reason provided'}" for s in rejected_systems]
-            ) or "None"
-
-            # ✅ Consolidated email to ICT
-            send_mail(
-                subject="[TSC] New Access Request (HOD Review Completed)",
-                message=(
-                    f"Staff {request_obj.requester.full_name} ({request_obj.tsc_no}) has completed HOD review.\n\n"
-                    f"✅ Approved systems: {approved_list}\n\n"
-                    f"❌ Rejected systems:\n{rejected_list}\n\n"
-                    "Please log in to ICT Dashboard to process approved systems."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[settings.ICT_TEAM_EMAIL],
-            )
-
-            # ✅ Consolidated email to Staff
-            send_mail(
-                subject="[TSC] Your Access Request – HOD Review Completed",
-                message=(
-                    f"Dear {request_obj.requester.full_name},\n\n"
-                    f"Your system access request has been reviewed by your HOD.\n\n"
-                    f"✅ Approved systems: {approved_list}\n\n"
-                    f"❌ Rejected systems:\n{rejected_list}\n\n"
-                    "Next step: If approved, your request will now move to ICT for final approval."
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[request_obj.email],
-            )
-
-            # ✅ Update AccessRequest status
-            if approved_systems.exists():
-                request_obj.status = "pending_ict"
-            else:
-                request_obj.status = "rejected_hod"
-            request_obj.save()
-
-        return redirect("hod_dashboard")
-
-
-
-
-
-
-@login_required
-def ict_system_decision(request, system_id):
-    # role guard: only ICT may access
-    if not getattr(request.user, "userrole", None) or request.user.userrole.role != "ict":
-        return HttpResponse(status=403)
-
-    system = get_object_or_404(RequestedSystem, id=system_id)
-
-    if request.method == "POST":
-        action = request.POST.get("action")
-        comment = request.POST.get("comment", "")
-
-        if action == "approve":
-            system.ict_status = "approved"
-            system.ict_comment = ""
-            system.save()
-            messages.success(request, f"{system.get_system_display()} approved and email sent.")
-
-        elif action == "reject":
-            system.ict_status = "rejected"
-            system.ict_comment = comment
-            system.save()
-            messages.warning(request, f"{system.get_system_display()} rejected. Email sent with reason.")
-
-        # ✅ After every ICT action → check if all systems processed
-        request_obj = system.access_request
-        pending = request_obj.requested_systems.filter(ict_status="pending", hod_status="approved").exists()
-
-        if not pending:  
-            approved_systems = request_obj.requested_systems.filter(ict_status="approved", hod_status="approved")
-            rejected_systems = request_obj.requested_systems.filter(ict_status="rejected", hod_status="approved")
-
-            approved_list = ", ".join([s.get_system_display() for s in approved_systems]) or "None"
-            rejected_list = "\n".join(
-                [f"{s.get_system_display()} → {s.ict_comment or 'No reason provided'}" for s in rejected_systems]
-            ) or "None"
-
-            # ✅ Use EmailMessage for CC
-            subject = "[TSC] Your Access Request – ICT Review Completed"
-            body = (
-                f"Dear {request_obj.requester.full_name},\n\n"
-                f"Your system access request has now been reviewed by ICT.\n\n"
-                f"✅ Approved systems: {approved_list}\n\n"
-                f"❌ Rejected systems:\n{rejected_list}\n\n"
-                "Awaiting assignment of rights by admin. Please contact ICT if further clarification is needed."
-            )
-
-            email = EmailMessage(
-                subject=subject,
-                body=body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                to=[request_obj.email],  # staff
-                cc=[request_obj.directorate.hod_email],  # ✅ HOD is CC’d
-            )
-            email.send()
-
-            # ✅ Update AccessRequest status
-            if approved_systems.exists():
-                request_obj.status = "approved"
-            else:
-                request_obj.status = "rejected_ict"
-            request_obj.save()
-
-        return redirect("ict_dashboard")
 
 
 
