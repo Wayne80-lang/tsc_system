@@ -1,6 +1,8 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from .models import CustomUser, UserRole, SystemAdmin, Directorate
+from .models import UserProfile, AccessLog
+from django.contrib.auth.signals import user_logged_in
 
 @receiver(post_save, sender=CustomUser)
 def create_user_role(sender, instance, created, **kwargs):
@@ -41,3 +43,13 @@ def sync_hod_to_directorate(sender, instance, created, **kwargs):
             except Directorate.DoesNotExist:
                 pass
 
+@receiver(user_logged_in)
+def log_user_login(sender, request, user, **kwargs):
+    # Get IP Address
+    x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+    if x_forwarded_for:
+        ip = x_forwarded_for.split(',')[0]
+    else:
+        ip = request.META.get('REMOTE_ADDR')
+    
+    AccessLog.objects.create(user=user, action="Login", ip_address=ip)

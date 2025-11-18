@@ -1,150 +1,302 @@
+import csv
+import json
+from datetime import timedelta, datetime
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django import forms
+from django.utils.html import format_html
+from django.http import HttpResponse
+from django.utils import timezone
+from django.db.models import Count
+from django.contrib.admin import SimpleListFilter
+from django.utils.timezone import localdate
+from django.contrib.admin.models import LogEntry
+
+# PDF & Excel Imports
+from openpyxl import Workbook
+from openpyxl.styles import Font
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+
 from .models import (
     CustomUser, UserRole, Directorate, 
-    SystemAdmin, RequestedSystem, HodAssignment, SystemAdminAssignment
+    SystemAdmin, RequestedSystem, HodAssignment, 
+    SystemAdminAssignment, AccessRequest, SystemAnalytics, AccessLog
 )
 
-# --- 1. Directorate Admin ---
+# ==========================================
+# 0. CONFIGURATION
+# ==========================================
+admin.site.site_header = "TSC SYSTEM ADMINISTRATION"
+admin.site.site_title = "TSC Admin Portal"
+admin.site.index_title = "System Control Center"
+
+# ==========================================
+# 1. FILTERS & HELPERS
+# ==========================================
+class OverdueFilter(SimpleListFilter):
+    title = 'Turnaround Status'
+    parameter_name = 'turnaround'
+    def lookups(self, request, model_admin):
+        return (('overdue', '⚠️ Overdue (>3 Days)'), ('today', '📅 Submitted Today'))
+    def queryset(self, request, queryset):
+        now = timezone.now()
+        if self.value() == 'overdue':
+            threshold = now - timedelta(days=3)
+            return queryset.filter(submitted_at__lt=threshold).exclude(status__in=['approved', 'rejected_hod', 'rejected_ict'])
+        if self.value() == 'today':
+            return queryset.filter(submitted_at__date=now.date())
+
+def export_to_csv(modeladmin, request, queryset):
+    opts = modeladmin.model._meta
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename=TSC_{opts.verbose_name_plural}_{timezone.now().date()}.csv'
+    writer = csv.writer(response)
+    fields = [field.name for field in opts.get_fields() if not field.many_to_many and not field.one_to_many]
+    writer.writerow(fields)
+    for obj in queryset:
+        data_row = []
+        for field in fields:
+            value = getattr(obj, field)
+            if callable(value): value = value()
+            if isinstance(value, datetime): value = value.strftime('%Y-%m-%d %H:%M')
+            data_row.append(value)
+        writer.writerow(data_row)
+    return response
+export_to_csv.short_description = "📊 Export Selected to CSV"
+
+def revoke_access(modeladmin, request, queryset):
+    queryset.update(sysadmin_status='revoked', sysadmin_decision_date=timezone.now())
+    modeladmin.message_user(request, "Selected rights have been REVOKED.")
+revoke_access.short_description = "⛔ Revoke Access (Security)"
+
+# ==========================================
+# 2. INLINES
+# ==========================================
+class UserRoleInline(admin.StackedInline):
+    model = UserRole
+    can_delete = False
+    fk_name = 'user'
+    classes = ('collapse',)
+
+class HodAssignmentInline(admin.TabularInline):
+    model = HodAssignment
+    fk_name = 'hod_user'
+    extra = 0
+    classes = ('collapse',)
+
+class SystemAdminInline(admin.StackedInline):
+    model = SystemAdmin
+    fk_name = 'user'
+    extra = 0
+    classes = ('collapse',)
+
+class RequestedSystemInline(admin.TabularInline):
+    model = RequestedSystem
+    extra = 0
+    can_delete = False
+    fields = ('system', 'level_of_access', 'visual_status', 'sysadmin_comment')
+    readonly_fields = ('system', 'level_of_access', 'visual_status', 'sysadmin_comment')
+    def visual_status(self, obj):
+        colors = {'approved': 'green', 'rejected': 'red', 'pending': 'orange', 'revoked': 'black'}
+        return format_html('<span style="color:{}; font-weight:900;">● {}</span>', colors.get(obj.sysadmin_status, 'gray'), obj.get_sysadmin_status_display())
+    visual_status.short_description = "Status"
+
+# ==========================================
+# 3. ADMIN CLASSES
+# ==========================================
+
 @admin.register(Directorate)
 class DirectorateAdmin(admin.ModelAdmin):
-    list_display = ['name', 'hod_email']
+    list_display = ['name', 'hod_email', 'staff_count']
     search_fields = ['name', 'hod_email']
+    def staff_count(self, obj): return obj.users.count()
 
-# --- 2. Custom User Admin ---
+@admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
+    class Media: css = {'all': ('css/tsc_admin.css',)}
     model = CustomUser
-    list_display = ("tsc_no", "full_name", "email", "directorate", "is_staff", "is_active")
-    list_filter = ("is_staff", "is_active", "directorate")
+    list_display = ("tsc_no", "full_name", "email", "directorate", "role_badge", "is_active")
+    list_filter = ("is_staff", "is_active", "directorate", "userrole__role")
     search_fields = ("tsc_no", "full_name", "email")
     ordering = ("tsc_no",)
-
+    inlines = [UserRoleInline, HodAssignmentInline, SystemAdminInline]
+    actions = [export_to_csv]
+    
     fieldsets = (
-        (None, {"fields": ("tsc_no", "full_name", "email", "password", "directorate")}),
-        ("Permissions", {"fields": ("is_staff", "is_active", "is_superuser", "groups", "user_permissions")}),
+        ("Account", {"fields": ("tsc_no", "password")}),
+        ("Personal Info", {"fields": ("full_name", "email", "directorate")}),
+        ("Permissions", {"fields": ("is_staff", "is_active", "is_superuser", "groups")}),
     )
-
-    add_fieldsets = (
-        (None, {
-            "classes": ("wide",),
-            "fields": ("tsc_no", "full_name", "email", "password1", "password2", "directorate", "is_staff", "is_active"),
-        }),
-    )
-
-# --- 3. User Role Admin (Unified HOD & System Admin Logic) ---
-class UserRoleForm(forms.ModelForm):
-    # Field for System Admins
-    system = forms.ChoiceField(
-        choices=RequestedSystem.SYSTEM_CHOICES,
-        required=False,
-        label="System (Select if Role is System Admin)"
-    )
-    
-    # Field for HODs
-    directorate_assigned = forms.ModelChoiceField(
-        queryset=Directorate.objects.all(),
-        required=False,
-        label="Directorate (Select if Role is HOD)"
-    )
-
-    class Meta:
-        model = UserRole
-        fields = ['user', 'role', 'system', 'directorate_assigned']
-    
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        if self.instance and self.instance.pk:
-            user = self.instance.user
-            
-            # A. Load existing System for System Admins
-            try:
-                sys_admin = SystemAdmin.objects.get(user=user)
-                self.fields['system'].initial = sys_admin.system
-            except SystemAdmin.DoesNotExist:
-                pass
-
-            # B. Load Directorate for HODs (With Robust Error Handling)
-            # We use .filter().first() instead of .get() to prevent crashing if duplicates already exist
-            hod_assign = HodAssignment.objects.filter(hod_user=user).first()
-            if hod_assign:
-                self.fields['directorate_assigned'].initial = hod_assign.directorate
-            elif user.directorate:
-                # Fallback: Default to their profile directorate
-                self.fields['directorate_assigned'].initial = user.directorate
-
-    def save(self, commit=True):
-        instance = super().save(commit=False)
-        user = instance.user
-        
-        # --- Logic for System Administrators ---
-        system_value = self.cleaned_data.get('system')
-        if instance.role == 'sys_admin':
-            if system_value:
-                sys_admin, created = SystemAdmin.objects.get_or_create(user=user)
-                sys_admin.system = system_value
-                sys_admin.save()
-        else:
-            SystemAdmin.objects.filter(user=user).delete()
-
-        # --- Logic for Head of Directorates (HOD) ---
-        dir_value = self.cleaned_data.get('directorate_assigned')
-        
-        if instance.role == 'hod':
-            if dir_value:
-                # 1. CRITICAL FIX: Detach user from ANY OTHER directorates first.
-                # This ensures the user is HOD of only ONE directorate at a time.
-                HodAssignment.objects.filter(hod_user=user).exclude(directorate=dir_value).update(hod_user=None)
-
-                # 2. Assign user to the NEW directorate
-                HodAssignment.objects.update_or_create(
-                    directorate=dir_value,
-                    defaults={'hod_user': user}
-                )
-        else:
-            # Cleanup: If role is no longer HOD, remove them from assignments
-            HodAssignment.objects.filter(hod_user=user).update(hod_user=None)
-
-        if commit:
-            instance.save()
-        return instance
+    def role_badge(self, obj):
+        if hasattr(obj, 'userrole'):
+            role = obj.userrole.role
+            bg = "#001F54" if role in ['sys_admin', 'super_admin'] else "#17a2b8" if role == 'ict' else "#6c757d"
+            return format_html('<span style="background-color:{}; color:white; padding:3px 8px; border-radius:10px;">{}</span>', bg, obj.userrole.get_role_display().upper())
+        return "-"
+    role_badge.short_description = "Role"
 
 @admin.register(UserRole)
 class UserRoleAdmin(admin.ModelAdmin):
-    form = UserRoleForm
-    list_display = ("user", "role", "get_assignment_display")
-    list_filter = ("role",)
-    search_fields = ("user__tsc_no", "user__full_name")
-
-    def get_assignment_display(self, obj):
-        """Displays the System or Directorate based on the role."""
-        if obj.role == 'sys_admin':
-            try:
-                return f"System: {obj.user.systemadmin.get_system_display()}"
-            except:
-                return "System: Unassigned"
-        elif obj.role == 'hod':
-            # Use filter().first() to avoid crashing on duplicates
-            assignment = HodAssignment.objects.filter(hod_user=obj.user).first()
-            if assignment:
-                return f"Directorate: {assignment.directorate.name}"
-            return "Directorate: Unassigned"
+    list_display = ("user", "role", "get_assignment")
+    search_fields = ("user__tsc_no",)
+    def get_assignment(self, obj):
+        if obj.role == 'sys_admin': return f"System: {getattr(obj.user, 'systemadmin', 'Unassigned')}"
+        if obj.role == 'hod': return f"Dir: {HodAssignment.objects.filter(hod_user=obj.user).first() or 'Unassigned'}"
         return "-"
-    get_assignment_display.short_description = "Assignment Details"
+
+@admin.register(AccessRequest)
+class AccessRequestAdmin(admin.ModelAdmin):
+    class Media: css = {'all': ('css/tsc_admin.css',)}
+    list_display = ('requester_info', 'progress_visual', 'status_badge', 'submitted_at', 'turnaround_time')
+    list_filter = (OverdueFilter, 'status', 'directorate', 'submitted_at')
+    search_fields = ('requester__full_name', 'requester__tsc_no', 'tsc_no')
+    inlines = [RequestedSystemInline]
+    date_hierarchy = 'submitted_at'
+    actions = [export_to_csv]
+    list_per_page = 20
+
+    def requester_info(self, obj): return format_html("<strong>{}</strong><br><span style='color:#666;'>{}</span>", obj.requester.full_name, obj.tsc_no)
+    def turnaround_time(self, obj):
+        delta = timezone.now() - obj.submitted_at
+        color = "red" if delta.days > 3 else "green"
+        return format_html('<span style="color: {}; font-weight:bold;">{} days</span>', color, delta.days)
+    def progress_visual(self, obj):
+        percent = 10
+        color = "#ffc107"
+        if obj.status == 'pending_hod': percent = 25
+        elif obj.status == 'pending_ict': percent = 60; color = "#17a2b8"
+        elif obj.status == 'approved': percent = 100; color = "#28a745"
+        elif 'rejected' in obj.status: percent = 100; color = "#dc3545"
+        return format_html('<div class="progress-container"><div class="progress-bar" style="width: {}%; background-color: {};">{}%</div></div>', percent, color, percent)
+    def status_badge(self, obj):
+        colors = {'approved': '#28a745', 'rejected_hod': '#dc3545', 'rejected_ict': '#dc3545', 'pending_hod': '#ffc107', 'pending_ict': '#17a2b8'}
+        bg_color = colors.get(obj.status, '#6c757d')
+        return format_html('<span style="background-color:{}; color:white; padding:5px 10px; border-radius:12px; font-size:10px; font-weight:bold;">{}</span>', bg_color, obj.get_status_display().upper())
+
+# ✅ 1. AUDIT LOG ADMIN (System Rights)
+@admin.register(RequestedSystem)
+class AuditLogAdmin(admin.ModelAdmin):
+    class Media: css = {'all': ('css/tsc_admin.css',)}
+    list_display = ('request_ref', 'system_badge', 'sysadmin_status_colored', 'action_dates')
+    list_filter = ('sysadmin_status', 'system', 'directorate', 'access_request__submitted_at')
+    search_fields = ('access_request__requester__full_name', 'access_request__tsc_no')
+    date_hierarchy = 'access_request__submitted_at'
+    actions = [export_to_csv, revoke_access] 
+
+    def request_ref(self, obj): return f"{obj.access_request.requester.full_name}"
+    def system_badge(self, obj): return format_html('<span style="color:#001F54; font-weight:bold;">{}</span>', obj.get_system_display())
+    def sysadmin_status_colored(self, obj):
+        colors = {'approved': 'green', 'rejected': 'red', 'revoked': 'black', 'pending': 'orange'}
+        return format_html('<span style="color:{}; font-weight:bold;">{}</span>', colors.get(obj.sysadmin_status, 'black'), obj.sysadmin_status.upper())
+    def action_dates(self, obj): return obj.sysadmin_decision_date.strftime('%Y-%m-%d') if obj.sysadmin_decision_date else "-"
+
+
+# ✅ 2. ACCESS LOG ADMIN (Login History)
+@admin.register(AccessLog)
+class AccessLogAdmin(admin.ModelAdmin):
+    list_display = ('user', 'action', 'timestamp', 'ip_address')
+    list_filter = ('action', 'timestamp')
+    search_fields = ('user__full_name', 'user__tsc_no', 'ip_address')
+    date_hierarchy = 'timestamp'
+    
+    def has_add_permission(self, request): return False
+    def has_change_permission(self, request, obj=None): return False
+
+
+# ✅ 3. DASHBOARD (SYSTEM ANALYTICS)
+@admin.register(SystemAnalytics)
+class SystemAnalyticsAdmin(admin.ModelAdmin):
+    change_list_template = 'admin/system_analytics.html'
+    date_hierarchy = 'submitted_at'
+    
+    def changelist_view(self, request, extra_context=None):
+        # 1. GATHER DATA
+        total = AccessRequest.objects.count()
+        
+        threshold = timezone.now() - timedelta(days=3)
+        overdue = AccessRequest.objects.filter(
+            submitted_at__lt=threshold, status__in=['pending_hod', 'pending_ict']
+        ).count()
+        
+        # Active Staff (Unique users with approved rights)
+        active_staff_count = RequestedSystem.objects.filter(sysadmin_status='approved')\
+            .values('access_request__requester').distinct().count()
+        
+        raw_rights = RequestedSystem.objects.filter(sysadmin_status='approved')\
+            .values('system').annotate(count=Count('id')).order_by('-count')
+        
+        system_map = dict(RequestedSystem.SYSTEM_CHOICES)
+        granted_rights = [{'name': system_map.get(r['system'], r['system']), 'count': r['count']} for r in raw_rights]
+
+        # Recent Logs for the "Tab" view
+        recent_logs = AccessLog.objects.select_related('user').order_by('-timestamp')[:20]
+
+        # 2. EXPORT EXCEL
+        if 'export_excel' in request.GET:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Executive Dashboard"
+            ws.append(["TSC SYSTEM ACCESS REPORT"])
+            ws.append(["Generated On:", datetime.now().strftime('%Y-%m-%d %H:%M')])
+            ws.append([])
+            ws.append(["Active Staff (Unique Users)", active_staff_count])
+            ws.append(["Total Requests", total])
+            ws.append(["Overdue", overdue])
+            ws.append([])
+            ws.append(["SYSTEM NAME", "USERS"])
+            for item in granted_rights: ws.append([item['name'], item['count']])
+            response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            response["Content-Disposition"] = f'attachment; filename="TSC_Dashboard_{localdate()}.xlsx"'
+            wb.save(response)
+            return response
+
+        # 3. EXPORT PDF
+        if 'export_pdf' in request.GET:
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=A4)
+            elements = []
+            styles = getSampleStyleSheet()
+            elements.append(Paragraph("TSC EXECUTIVE DASHBOARD", styles['Title']))
+            elements.append(Paragraph(f"Active Staff With Rights: {active_staff_count}", styles['Heading2']))
+            elements.append(Spacer(1, 20))
+            data = [["System Name", "Users"]]
+            for item in granted_rights: data.append([item['name'], str(item['count'])])
+            t = Table(data, colWidths=[250, 100])
+            t.setStyle(TableStyle([('BACKGROUND', (0,0), (-1,0), colors.navy), ('TEXTCOLOR', (0,0), (-1,0), colors.gold), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+            elements.append(t)
+            doc.build(elements)
+            buffer.seek(0)
+            return HttpResponse(buffer, content_type='application/pdf')
+
+        # 4. RENDER
+        extra_context = extra_context or {}
+        extra_context['title'] = "Executive System Dashboard"
+        extra_context['total_requests'] = total
+        extra_context['overdue_requests'] = overdue
+        extra_context['active_staff_count'] = active_staff_count
+        extra_context['granted_rights'] = granted_rights
+        extra_context['recent_logs'] = recent_logs
+        
+        extra_context['chart_labels'] = [x['name'] for x in granted_rights]
+        extra_context['chart_data'] = [x['count'] for x in granted_rights]
+        
+        return super().changelist_view(request, extra_context=extra_context)
 
 @admin.register(SystemAdminAssignment)
 class SystemAdminAssignmentAdmin(admin.ModelAdmin):
     list_display = ('get_system_display', 'admin_user', 'admin_email')
-    list_filter = ('system',)
-    search_fields = ('admin_user__full_name', 'admin_user__email', 'admin_email')
-
     def get_system_display(self, obj):
         return dict(SystemAdminAssignment.SYSTEM_CHOICES).get(obj.system, obj.system)
-    get_system_display.short_description = "System"
 
-# Safe Registration for CustomUser
-try:
-    admin.site.register(CustomUser, CustomUserAdmin)
-except admin.sites.AlreadyRegistered:
-    pass
+@admin.register(LogEntry)
+class LogEntryAdmin(admin.ModelAdmin):
+    list_display = ('action_time', 'user', 'content_type', 'action_flag', 'change_message')
+    list_filter = ('action_time', 'user', 'action_flag')
+    search_fields = ('object_repr', 'change_message')
+    date_hierarchy = 'action_time'
+    
+    def has_add_permission(self, request): return False
+    def has_change_permission(self, request, obj=None): return False
+    def has_delete_permission(self, request, obj=None): return False

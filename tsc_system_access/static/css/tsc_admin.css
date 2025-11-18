@@ -1,0 +1,65 @@
+/* access_request/static/css/tsc_admin.css */
+
+/* --- 1. TSC BRANDING (Navy & Gold) --- */
+:root {
+    --primary: #001F54; /* TSC Navy */
+    --secondary: #FFD700; /* TSC Gold */
+    --accent: #e0a800;
+    --bg-light: #f4f6f9;
+}
+
+/* Header Bar */
+#header {
+    background: var(--primary) !important;
+    color: var(--secondary) !important;
+    border-bottom: 3px solid var(--secondary);
+}
+#header a:link, #header a:visited {
+    color: #ffffff !important;
+    font-weight: 600;
+}
+
+/* Branding Text */
+#branding h1 {
+    color: var(--secondary) !important;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+/* Buttons */
+.button, input[type=submit], input[type=button], .submit-row input {
+    background: var(--primary) !important;
+    color: white !important;
+    border: none;
+    transition: 0.3s;
+}
+.button:hover, input[type=submit]:hover {
+    background: var(--accent) !important;
+    color: var(--primary) !important;
+}
+
+/* Modules / Tables */
+.module caption, .module h2 {
+    background-color: #f8f9fa !important;
+    color: var(--primary) !important;
+    border-bottom: 2px solid var(--primary);
+}
+
+/* Progress Bars in Admin */
+.progress-container {
+    background-color: #e0e0e0;
+    border-radius: 8px;
+    width: 120px;
+    height: 12px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+}
+.progress-bar {
+    height: 100%;
+    text-align: center;
+    line-height: 12px;
+    color: white;
+    font-size: 9px;
+    font-weight: bold;
+}
