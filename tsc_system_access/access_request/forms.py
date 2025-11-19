@@ -1,5 +1,14 @@
 from django import forms
 from .models import AccessRequest, Directorate, RequestedSystem
+from django.contrib.auth.forms import UserCreationForm, UserChangeForm
+from .models import CustomUser
+from django.contrib.auth.forms import UserCreationForm
+from django import forms  # <-- The correct module for CharField and PasswordInput
+from django.utils.translation import gettext as _ 
+# Note: PasswordField doesn't exist; we use CharField + PasswordInput widget.
+from django.core.exceptions import ValidationError
+
+
 
 SYSTEM_CHOICES = [
     ('1', 'Active Directory'),
@@ -55,3 +64,66 @@ class AccessRequestForm(forms.ModelForm):
             'designation': forms.TextInput(attrs={'class': 'form-control'}),
             'email': forms.EmailInput(attrs={'class': 'form-control'}),
         }
+
+
+
+
+
+class CustomUserCreationForm(UserCreationForm):
+    """
+    FIXED VERSION:
+    - Uses password1 & password2 (Django standard)
+    - Fully compatible with UserAdmin
+    - Uses TSC No as login field
+    """
+
+    password1 = forms.CharField(
+        label="Password",
+        strip=False,
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'}),
+    )
+    password2 = forms.CharField(
+        label="Confirm Password",
+        strip=False,
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'}),
+    )
+
+    class Meta:
+        model = CustomUser
+        fields = ('tsc_no', 'full_name', 'email', 'directorate')
+
+    def clean_password2(self):
+        pwd1 = self.cleaned_data.get("password1")
+        pwd2 = self.cleaned_data.get("password2")
+
+        if pwd1 and pwd2 and pwd1 != pwd2:
+            raise ValidationError("Your passwords do not match.")
+        return pwd2
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.set_password(self.cleaned_data["password1"])
+
+        if commit:
+            user.save()
+        return user
+
+
+class CustomUserChangeForm(UserChangeForm):
+    """
+    FIXED VERSION:
+    - Used when editing a user
+    - Password read-only field preserved
+    """
+
+    class Meta:
+        model = CustomUser
+        fields = (
+            'tsc_no',
+            'full_name',
+            'email',
+            'directorate',
+            'is_active',
+            'is_staff',
+            'is_superuser',
+        )

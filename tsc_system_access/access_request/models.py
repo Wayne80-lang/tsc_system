@@ -92,9 +92,20 @@ class CustomUserManager(BaseUserManager):
         return self.create_user(tsc_no, password, **extra_fields)
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
-    tsc_no = models.CharField(max_length=20, unique=True)
+    tsc_no = models.CharField(
+        max_length=20, 
+        unique=True,
+        # FIX: Custom message for unique constraint violation
+        error_messages={'unique': 'TSC Number already exists.'}
+    )
     full_name = models.CharField(max_length=255)
-    email = models.EmailField(unique=True, null=True, blank=True)
+    email = models.EmailField(
+        unique=True, 
+        null=True, 
+        blank=True,
+        # FIX: Custom message for unique constraint violation
+        error_messages={'unique': 'Email address already exists.'}
+    )
     directorate = models.ForeignKey(Directorate, on_delete=models.SET_NULL, null=True, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)

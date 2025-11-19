@@ -1,4 +1,5 @@
 import csv
+import io
 import json
 from datetime import timedelta, datetime
 from django.contrib import admin
@@ -18,6 +19,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
+
+from .forms import CustomUserChangeForm, CustomUserCreationForm
 
 from .models import (
     CustomUser, UserRole, Directorate, 
@@ -113,29 +116,47 @@ class DirectorateAdmin(admin.ModelAdmin):
     search_fields = ['name', 'hod_email']
     def staff_count(self, obj): return obj.users.count()
 
-@admin.register(CustomUser)
+
 class CustomUserAdmin(UserAdmin):
-    class Media: css = {'all': ('css/tsc_admin.css',)}
+    add_form = CustomUserCreationForm
+    form = CustomUserChangeForm
     model = CustomUser
-    list_display = ("tsc_no", "full_name", "email", "directorate", "role_badge", "is_active")
-    list_filter = ("is_staff", "is_active", "directorate", "userrole__role")
-    search_fields = ("tsc_no", "full_name", "email")
-    ordering = ("tsc_no",)
-    inlines = [UserRoleInline, HodAssignmentInline, SystemAdminInline]
-    actions = [export_to_csv]
-    
+
+    list_display = ('tsc_no', 'full_name', 'email', 'directorate', 'is_staff')
+    search_fields = ('tsc_no', 'full_name', 'email')
+    ordering = ('tsc_no',)
+
     fieldsets = (
-        ("Account", {"fields": ("tsc_no", "password")}),
-        ("Personal Info", {"fields": ("full_name", "email", "directorate")}),
-        ("Permissions", {"fields": ("is_staff", "is_active", "is_superuser", "groups")}),
+        (None, {'fields': ('tsc_no', 'password')}),
+        ('Personal info', {'fields': ('full_name', 'email', 'directorate')}),
+        ('Permissions', {
+            'fields': (
+                'is_active',
+                'is_staff',
+                'is_superuser',
+                'groups',
+                'user_permissions'
+            )
+        }),
+        ('Important dates', {'fields': ('last_login', )}),
     )
-    def role_badge(self, obj):
-        if hasattr(obj, 'userrole'):
-            role = obj.userrole.role
-            bg = "#001F54" if role in ['sys_admin', 'super_admin'] else "#17a2b8" if role == 'ict' else "#6c757d"
-            return format_html('<span style="background-color:{}; color:white; padding:3px 8px; border-radius:10px;">{}</span>', bg, obj.userrole.get_role_display().upper())
-        return "-"
-    role_badge.short_description = "Role"
+
+    add_fieldsets = (
+        (None, {
+            'classes': ('wide',),
+            'fields': (
+                'tsc_no',
+                'full_name',
+                'email',
+                'directorate',
+                'password1',
+                'password2',
+            ),
+        }),
+    )
+
+
+admin.site.register(CustomUser, CustomUserAdmin)
 
 @admin.register(UserRole)
 class UserRoleAdmin(admin.ModelAdmin):
