@@ -1,6 +1,6 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver
-from .models import CustomUser, UserRole, SystemAdmin, Directorate
+from .models import CustomUser, UserRole, Directorate
 from .models import UserProfile, AccessLog
 from django.contrib.auth.signals import user_logged_in
 
@@ -16,14 +16,11 @@ def create_user_role(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=UserRole)
 def create_or_update_system_admin(sender, instance, created, **kwargs):
-    if instance.role == 'sys_admin':
-        system_admin, created_admin = SystemAdmin.objects.get_or_create(user=instance.user)
-        if created_admin and not system_admin.system:
-            system_admin.system = '1'
-        system_admin.save()
-    else:
-        # remove SystemAdmin record if role is changed away from sys_admin
-        SystemAdmin.objects.filter(user=instance.user).delete()
+    """
+    System Admin role is now handled entirely through UserRole model.
+    No separate SystemAdmin table needed.
+    """
+    pass
 
 
 @receiver(post_save, sender=UserRole)

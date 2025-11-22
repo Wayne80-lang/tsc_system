@@ -118,27 +118,38 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
 
 class UserRole(models.Model):
     ROLE_CHOICES = [('hod', 'HOD'), ('ict', 'ICT'), ('staff', 'Staff'), ('sys_admin', 'System Admin'), ('super_admin', 'Overall Admin')]
-    user = models.OneToOneField("access_request.CustomUser", on_delete=models.CASCADE)
+    user = models.OneToOneField("access_request.CustomUser", on_delete=models.CASCADE, related_name="userrole")
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='staff')
+    
+    # HOD assignment: which directorate this HOD manages
+    directorate = models.ForeignKey('Directorate', on_delete=models.SET_NULL, null=True, blank=True, related_name='hod_user')
+    
+    # System Admin assignment: which systems this admin manages
+    system_assigned = models.CharField(max_length=20, choices=RequestedSystem.SYSTEM_CHOICES, blank=True, null=True, help_text="System this admin is responsible for (only for System Admin role)")
+    
+    # Staff assignment: who is the HOD/manager of this staff member (if role='staff')
     hod = models.ForeignKey("access_request.CustomUser", on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members_under_me")
-    def __str__(self): return f"{self.user.full_name} - {self.role}"
+    
+    def __str__(self): 
+        return f"{self.user.full_name} - {self.role}"
+    
+    def get_role_display(self):
+        return dict(self.ROLE_CHOICES).get(self.role)
+    
+    def get_system_assigned_display(self):
+        if self.system_assigned:
+            return dict(RequestedSystem.SYSTEM_CHOICES).get(self.system_assigned, self.system_assigned)
+        return "-"
+    
+    class Meta:
+        verbose_name = "User Role"
+        verbose_name_plural = "User Roles"
 
-class SystemAdminAssignment(models.Model):
-    system = models.CharField(max_length=20, choices=RequestedSystem.SYSTEM_CHOICES, unique=True)
-    admin_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="system_admin_roles")
-    admin_email = models.EmailField(blank=True, null=True)
-    def __str__(self): return f"{self.get_system_display()} -> {self.admin_user}"
 
-class SystemAdmin(models.Model):
-     user = models.OneToOneField("access_request.CustomUser", on_delete=models.CASCADE)
-     system = models.CharField(max_length=20, choices=RequestedSystem.SYSTEM_CHOICES, unique=True)
-     def __str__(self): return f"{self.user.full_name} - {self.get_system_display()}"
+# CONSOLIDATED: SystemAdmin & HodAssignment merged into UserRole
+# Use UserRole for admin role assignments instead of separate tables
+# HOD email comes from Directorate.hod_email
 
-class HodAssignment(models.Model):
-    directorate = models.OneToOneField(Directorate, on_delete=models.CASCADE, related_name='hod_assignment')
-    hod_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='hod_roles')
-    hod_email = models.EmailField(blank=True, null=True)
-    def __str__(self): return f"{self.directorate.name} -> {self.hod_user}"
 
 class UserProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
@@ -146,4 +157,6 @@ class UserProfile(models.Model):
     directorate = models.ForeignKey('Directorate', on_delete=models.SET_NULL, null=True, blank=True, related_name='users')
     hod = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="staff_members")
     system_assigned = models.CharField(max_length=20, choices=RequestedSystem.SYSTEM_CHOICES, blank=True, null=True)
-    def __str__(self): return f"{self.user.full_name}"
+    
+    def __str__(self): 
+        return f"{self.user.full_name}"

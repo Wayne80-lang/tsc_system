@@ -23,7 +23,7 @@ from io import BytesIO
 from django.urls import reverse
 from django.http import HttpResponseRedirect
 
-from .models import AccessRequest, RequestedSystem, SystemAdmin, SystemAdminAssignment, UserRole, HodAssignment
+from .models import AccessRequest, RequestedSystem, UserRole
 from .forms import AccessRequestForm
 
 # --- HELPER: Centralized Status Logic ---
@@ -111,12 +111,17 @@ def hod_dashboard(request):
     user = request.user
     directorate = None
 
-    # 1. Get Directorate
-    assignment = user.hod_roles.first()
-    if assignment:
-        directorate = assignment.directorate
+    # 1. Role Guard - User must be HOD
+    user_role = UserRole.objects.filter(user=user, role='hod').first()
+    if not user_role:
+        messages.error(request, "You do not have access to HOD dashboard.")
+        return redirect('user_home')
+    
+    # 2. Get Directorate from UserRole
+    directorate = user_role.directorate
     if not directorate:
-        directorate = getattr(user, 'directorate', None)
+        messages.error(request, "No directorate assignment found for your HOD role.")
+        return redirect('user_home')
 
     requests = AccessRequest.objects.none()
     history = AccessRequest.objects.none()
@@ -236,10 +241,14 @@ def hod_system_decision(request, system_id):
     system = get_object_or_404(RequestedSystem, id=system_id)
     request_obj = system.access_request
     
-    is_authorized = HodAssignment.objects.filter(hod_user=request.user, directorate=request_obj.directorate).exists()
+    # Check if user is HOD for this directorate or manages the requester
+    hod_role = UserRole.objects.filter(user=request.user, role='hod').first()
+    is_authorized = hod_role and (
+        hod_role.directorate == request_obj.directorate or 
+        UserRole.objects.filter(hod=request.user, user=request_obj.requester).exists()
+    )
     if not is_authorized:
-        if not UserRole.objects.filter(hod=request.user, user=request_obj.requester).exists():
-             return HttpResponse(status=403, content="Access Denied")
+         return HttpResponse(status=403, content="Access Denied")
 
     if request.method == "POST":
         action = request.POST.get("action")
@@ -284,8 +293,14 @@ def hod_system_decision(request, system_id):
 def ict_dashboard(request):
     """ICT dashboard: Pending items + History + Search/Filter + Export."""
     user = request.user
+    
+    # 1. Role Guard - User must be ICT
+    user_role = UserRole.objects.filter(user=user, role='ict').first()
+    if not user_role:
+        messages.error(request, "You do not have access to ICT dashboard.")
+        return redirect('user_home')
 
-    # 1. Base Querysets
+    # 2. Base Querysets
     requests = AccessRequest.objects.none()
     history = AccessRequest.objects.none()
 
@@ -441,47 +456,49 @@ def ict_system_decision(request, system_id):
 @login_required
 def system_admin_dashboard(request):
     """System Admin Dashboard: Pending + History + Filters + Export."""
-    # 1. Get Admin's Assigned System
-    try:
-        system_admin = SystemAdmin.objects.get(user=request.user)
-    except SystemAdmin.DoesNotExist:
-        # Fallback if accessed by superuser without specific assignment
-        if request.user.is_superuser:
-            # Superusers see all? Or handle gracefully. 
-            # For now, redirect or show error.
-            messages.error(request, "You are not assigned to a specific system.")
-            return redirect("user_home")
-        return HttpResponse(status=403)
+    # 1. Check if user is a System Admin
+    user_role = UserRole.objects.filter(user=request.user, role='sys_admin').first()
+    if not user_role:
+        messages.error(request, "You do not have access to System Admin dashboard.")
+        return redirect("user_home")
 
-    # 2. Filter Parameters
+    # 2. Get the system assigned to this admin
+    assigned_system = user_role.system_assigned
+    if not assigned_system:
+        messages.error(request, "No system has been assigned to you yet.")
+        return redirect("user_home")
+    
+    # 3. Filter Parameters
     search_term = request.GET.get('tsc', "")
     start_date = request.GET.get("start_date", "")
     end_date = request.GET.get("end_date", "")
     active_tab = request.GET.get("active_tab", "pending")
     
-    # 3. Base Querysets (Grouped by Parent AccessRequest)
+    # 4. Base Querysets - Filter ONLY by assigned system
     
-    # A. Pending: Requests containing THIS admin's system with status 'pending'
+    # A. Pending: Systems with status 'pending' for THIS admin's assigned system
     requests = AccessRequest.objects.filter(
-        requested_systems__system=system_admin.system,
+        requested_systems__system=assigned_system,
         requested_systems__sysadmin_status="pending"
     ).distinct().select_related('requester').prefetch_related(
         Prefetch('requested_systems', queryset=RequestedSystem.objects.filter(
-            system=system_admin.system, 
+            system=assigned_system,
             sysadmin_status='pending'
         ))
     )
 
-    # B. History: Requests containing systems actioned by THIS admin
+    # B. History: Systems actioned by THIS admin for THIS assigned system
     history = AccessRequest.objects.filter(
+        requested_systems__system=assigned_system,
         requested_systems__system_admin=request.user
     ).distinct().order_by('-submitted_at').select_related('requester').prefetch_related(
         Prefetch('requested_systems', queryset=RequestedSystem.objects.filter(
+            system=assigned_system,
             system_admin=request.user
         ))
     )
 
-    # 4. Apply Filters
+    # 5. Apply Filters
     if search_term:
         requests = requests.filter(tsc_no__icontains=search_term)
         history = history.filter(tsc_no__icontains=search_term)
@@ -499,11 +516,10 @@ def system_admin_dashboard(request):
     if "export_excel" in request.GET:
         wb = Workbook()
         ws = wb.active
-        ws.title = f"{system_admin.get_system_display()} History"
+        ws.title = "System Admin History"
         ws.append(["Requester", "TSC No", "System", "Level", "Decision", "Action Date", "Comment"])
         
         for req in history:
-            # Only export the specific systems this admin worked on
             for sys in req.requested_systems.all():
                 if sys.system_admin == request.user:
                     action_date = sys.sysadmin_decision_date.strftime("%Y-%m-%d %H:%M") if sys.sysadmin_decision_date else "-"
@@ -514,7 +530,7 @@ def system_admin_dashboard(request):
                     ])
         
         response = HttpResponse(content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        response["Content-Disposition"] = f'attachment; filename="{system_admin.get_system_display()}_History_{localdate()}.xlsx"'
+        response["Content-Disposition"] = f'attachment; filename="System_Admin_History_{localdate()}.xlsx"'
         wb.save(response)
         return response
 
@@ -524,18 +540,18 @@ def system_admin_dashboard(request):
         elements = []
         styles = getSampleStyleSheet()
         
-        elements.append(Paragraph(f"{system_admin.get_system_display()} - Approval History", styles["Title"]))
+        elements.append(Paragraph("System Admin - Approval History", styles["Title"]))
         elements.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d')}", styles["Normal"]))
         elements.append(Spacer(1, 20))
         
-        data = [["Requester", "TSC No", "Level", "Decision", "Date"]]
+        data = [["Requester", "TSC No", "System", "Level", "Decision", "Date"]]
         for req in history:
             for sys in req.requested_systems.all():
                 if sys.system_admin == request.user:
                     d_date = sys.sysadmin_decision_date.strftime("%Y-%m-%d") if sys.sysadmin_decision_date else "-"
                     data.append([
                         req.requester.full_name, req.tsc_no,
-                        sys.level_of_access, sys.sysadmin_status.upper(), d_date
+                        sys.get_system_display(), sys.level_of_access, sys.sysadmin_status.upper(), d_date
                     ])
 
         table = Table(data, colWidths=[140, 80, 100, 80, 80])
@@ -551,15 +567,18 @@ def system_admin_dashboard(request):
         buffer.seek(0)
         return HttpResponse(buffer, content_type='application/pdf')
 
-    # Stats Counters
-    total_requests = RequestedSystem.objects.filter(system=system_admin.system).count()
-    pending_requests = RequestedSystem.objects.filter(system=system_admin.system, sysadmin_status="pending").count()
-    approved_requests = RequestedSystem.objects.filter(system=system_admin.system, sysadmin_status="approved").count()
-    rejected_requests = RequestedSystem.objects.filter(system=system_admin.system, sysadmin_status="rejected").count()
-    today_requests = RequestedSystem.objects.filter(system=system_admin.system, access_request__submitted_at__date=date.today()).count()
+    # Stats Counters - Only for assigned system
+    total_requests = RequestedSystem.objects.filter(system=assigned_system, sysadmin_status__isnull=False).count()
+    pending_requests = RequestedSystem.objects.filter(system=assigned_system, sysadmin_status="pending").count()
+    approved_requests = RequestedSystem.objects.filter(system=assigned_system, sysadmin_status="approved").count()
+    rejected_requests = RequestedSystem.objects.filter(system=assigned_system, sysadmin_status="rejected").count()
+    today_requests = RequestedSystem.objects.filter(system=assigned_system, access_request__submitted_at__date=date.today()).count()
+
+    # Get system name
+    system_name = dict(RequestedSystem.SYSTEM_CHOICES).get(assigned_system, assigned_system)
 
     context = {
-        "system_name": dict(RequestedSystem.SYSTEM_CHOICES).get(system_admin.system),
+        "system_name": system_name,
         "requests": requests,
         "history": history,
         "total_requests": total_requests,
@@ -576,37 +595,44 @@ def system_admin_dashboard(request):
 @require_POST
 @login_required
 def system_admin_decision(request, pk):
-    # 1. Role Guard
-    if not SystemAdmin.objects.filter(user=request.user).exists():
-        return HttpResponse(status=403)
+    # 1. Role Guard - check if user is a system admin
+    user_role = UserRole.objects.filter(user=request.user, role='sys_admin').first()
+    if not user_role:
+        return JsonResponse({"error": "Unauthorized"}, status=403) if request.headers.get('X-Requested-With') == 'XMLHttpRequest' else HttpResponse(status=403)
 
     sys_req = get_object_or_404(RequestedSystem, pk=pk)
-
-    # 2. Scope Guard
-    if not SystemAdmin.objects.filter(user=request.user, system=sys_req.system).exists():
-        return HttpResponse(status=403)
+    
+    # 2. Scope Guard - verify system matches assigned system
+    if sys_req.system != user_role.system_assigned:
+        error_msg = "You cannot manage this system"
+        return JsonResponse({"error": error_msg}, status=403) if request.headers.get('X-Requested-With') == 'XMLHttpRequest' else HttpResponse(status=403, content=error_msg)
     
     action = request.POST.get("action")
     comment = request.POST.get("comment", "")
 
-    # 3. Apply Decision
+    # 3. Validate Action
+    if action not in ["approve", "reject"]:
+        error_msg = "Invalid action"
+        return JsonResponse({"error": error_msg}, status=400) if request.headers.get('X-Requested-With') == 'XMLHttpRequest' else redirect('system_admin_dashboard')
+
+    # 4. Apply Decision
     if action == "approve":
         sys_req.sysadmin_status = "approved"
-        # ICT status mirrors SysAdmin for final step
         sys_req.ict_status = "approved"
-    elif action == "reject":
+        decision_text = "Granted"
+        badge_class = "bg-success"
+    else:  # reject
         sys_req.sysadmin_status = "rejected"
         sys_req.ict_status = "rejected"
-    else:
-        messages.error(request, "Invalid action.")
-        return redirect('system_admin_dashboard')
+        decision_text = "Rejected"
+        badge_class = "bg-danger"
 
     sys_req.sysadmin_comment = comment
     sys_req.sysadmin_decision_date = timezone.now()
     sys_req.system_admin = request.user
     sys_req.save()
 
-    # 4. Notifications
+    # 5. Notifications
     requester = sys_req.access_request.requester
     send_mail(
         subject=f"[TSC] Access Update for {sys_req.get_system_display()}",
@@ -616,13 +642,28 @@ def system_admin_decision(request, pk):
         fail_silently=True,
     )
 
-    # 5. Sync Parent Status
+    # 6. Sync Parent Status
     sync_request_status(sys_req.access_request)
-    messages.success(request, "Decision saved.")
 
-    # ✅ FIX: Redirect keeping Filters & Tab
-    # We force 'active_tab=pending' so the admin stays on the work list
-    return redirect(f"/access/system-admin/dashboard/?active_tab=pending&{request.GET.urlencode()}")
+    # 7. Determine response type
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    
+    if is_ajax:
+        # Return JSON for AJAX requests
+        decision_date = sys_req.sysadmin_decision_date.strftime("%b %d, %Y %H:%M")
+        return JsonResponse({
+            "success": True,
+            "message": f"Decision saved: {sys_req.get_system_display()} - {decision_text}",
+            "system_id": sys_req.id,
+            "status": decision_text,
+            "badge_class": badge_class,
+            "decision_date": decision_date,
+            "comment": comment if comment else "-"
+        })
+    else:
+        # Fallback to redirect for non-AJAX requests
+        messages.success(request, "Decision saved.")
+        return redirect(f"/access/system-admin/dashboard/?active_tab=pending&{request.GET.urlencode()}")
 
 
 
@@ -630,8 +671,11 @@ def system_admin_decision(request, pk):
 
 @login_required
 def overall_admin_dashboard(request):
-    if not request.user.is_superuser and getattr(request.user.userrole, 'role', '') != 'super_admin':
-        return HttpResponse(status=403)
+    # 1. Role Guard - User must be super admin or Overall Admin
+    user_role = UserRole.objects.filter(user=request.user, role='super_admin').first()
+    if not user_role and not request.user.is_superuser:
+        messages.error(request, "You do not have access to Overall Admin dashboard.")
+        return redirect('user_home')
 
     status_filter = request.GET.get("status", "")
     tsc_filter = request.GET.get("tsc", "")
@@ -818,14 +862,17 @@ def ict_reject(request, pk): return ict_system_decision(request, pk)
 
 @login_required
 def export_system_admin_data(request, format):
-    try: system_admin = SystemAdmin.objects.get(user=request.user)
-    except SystemAdmin.DoesNotExist: messages.error(request, "You are not assigned as a system admin."); return redirect("home")
-    requests = RequestedSystem.objects.filter(system=system_admin.system).select_related('access_request')
+    user_role = UserRole.objects.filter(user=request.user, role='sys_admin').first()
+    if not user_role: 
+        messages.error(request, "You are not assigned as a system admin."); 
+        return redirect("home")
+    requests = RequestedSystem.objects.filter(system_admin=request.user).select_related('access_request')
     if format == "csv":
         response = HttpResponse(content_type="text/csv")
-        response['Content-Disposition'] = f'attachment; filename="{system_admin.system}_requests.csv"'
+        response['Content-Disposition'] = f'attachment; filename="system_admin_requests.csv"'
         writer = csv.writer(response)
-        writer.writerow(["Requester", "TSC No", "Request Type", "Access Level", "Status", "Date"])
-        for r in requests: writer.writerow([r.access_request.requester.full_name, r.access_request.tsc_no, r.access_request.get_request_type_display(), r.level_of_access, r.sysadmin_status, r.access_request.submitted_at.strftime("%Y-%m-%d %H:%M")])
+        writer.writerow(["Requester", "TSC No", "System", "Request Type", "Access Level", "Status", "Date"])
+        for r in requests: 
+            writer.writerow([r.access_request.requester.full_name, r.access_request.tsc_no, r.get_system_display(), r.access_request.get_request_type_display(), r.level_of_access, r.sysadmin_status, r.access_request.submitted_at.strftime("%Y-%m-%d %H:%M")])
         return response
     return redirect("system_admin_dashboard")

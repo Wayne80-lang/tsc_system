@@ -24,8 +24,7 @@ from .forms import CustomUserChangeForm, CustomUserCreationForm
 
 from .models import (
     CustomUser, UserRole, Directorate, 
-    SystemAdmin, RequestedSystem, HodAssignment, 
-    SystemAdminAssignment, AccessRequest, SystemAnalytics, AccessLog
+    RequestedSystem, AccessRequest, SystemAnalytics, AccessLog
 )
 
 # ==========================================
@@ -83,17 +82,13 @@ class UserRoleInline(admin.StackedInline):
     fk_name = 'user'
     classes = ('collapse',)
 
-class HodAssignmentInline(admin.TabularInline):
-    model = HodAssignment
-    fk_name = 'hod_user'
-    extra = 0
-    classes = ('collapse',)
-
 class SystemAdminInline(admin.StackedInline):
-    model = SystemAdmin
+    model = UserRole
     fk_name = 'user'
     extra = 0
     classes = ('collapse',)
+    fields = ('role',)
+    verbose_name_plural = "Role Assignment"
 
 class RequestedSystemInline(admin.TabularInline):
     model = RequestedSystem
@@ -161,11 +156,39 @@ admin.site.register(CustomUser, CustomUserAdmin)
 @admin.register(UserRole)
 class UserRoleAdmin(admin.ModelAdmin):
     list_display = ("user", "role", "get_assignment")
-    search_fields = ("user__tsc_no",)
+    search_fields = ("user__tsc_no", "user__full_name")
+    list_filter = ('role',)
+    
+    fieldsets = (
+        ('User & Role', {
+            'fields': ('user', 'role'),
+        }),
+        ('HOD Assignment (for HOD role)', {
+            'fields': ('directorate',),
+            'classes': ('collapse',),
+        }),
+        ('System Admin Assignment (for System Admin role)', {
+            'fields': ('system_assigned',),
+            'classes': ('collapse',),
+        }),
+        ('Staff Manager (for Staff role)', {
+            'fields': ('hod',),
+            'classes': ('collapse',),
+        }),
+    )
+    
+    class Media:
+        js = ('admin/js/userrole_admin.js',)
+    
     def get_assignment(self, obj):
-        if obj.role == 'sys_admin': return f"System: {getattr(obj.user, 'systemadmin', 'Unassigned')}"
-        if obj.role == 'hod': return f"Dir: {HodAssignment.objects.filter(hod_user=obj.user).first() or 'Unassigned'}"
+        if obj.role == 'sys_admin' and obj.system_assigned: 
+            return f"System: {obj.get_system_assigned_display()}"
+        if obj.role == 'hod' and obj.directorate: 
+            return f"Directorate: {obj.directorate.name}"
+        if obj.role == 'staff' and obj.hod: 
+            return f"Manager: {obj.hod.full_name}"
         return "-"
+    get_assignment.short_description = "Assignment"
 
 @admin.register(AccessRequest)
 class AccessRequestAdmin(admin.ModelAdmin):
@@ -305,11 +328,9 @@ class SystemAnalyticsAdmin(admin.ModelAdmin):
         
         return super().changelist_view(request, extra_context=extra_context)
 
-@admin.register(SystemAdminAssignment)
-class SystemAdminAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('get_system_display', 'admin_user', 'admin_email')
-    def get_system_display(self, obj):
-        return dict(SystemAdminAssignment.SYSTEM_CHOICES).get(obj.system, obj.system)
+
+# REMOVED: SystemAdminAssignment & HodAssignment registrations (consolidated into UserRole)
+# Use UserRole admin to manage HOD and System Admin assignments
 
 @admin.register(LogEntry)
 class LogEntryAdmin(admin.ModelAdmin):

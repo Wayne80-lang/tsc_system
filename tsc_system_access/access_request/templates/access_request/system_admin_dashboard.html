@@ -4,9 +4,12 @@
 
 {% block extra_head %}
 <style>
-    /* Toggle Icons */
-    .btn-toggle-details[aria-expanded="true"] .icon-plus { display: none; }
-    .btn-toggle-details[aria-expanded="false"] .icon-minus { display: none; }
+    /* Toggle Icons - Always show plus initially, minus when expanded */
+    .btn-toggle-details .icon-plus { display: inline-block !important; }
+    .btn-toggle-details .icon-minus { display: none !important; }
+    
+    .btn-toggle-details[aria-expanded="true"] .icon-plus { display: none !important; }
+    .btn-toggle-details[aria-expanded="true"] .icon-minus { display: inline-block !important; }
     
     /* Clean Button */
     .btn-icon-clean {
@@ -120,7 +123,7 @@
                         {% for req in requests %}
                             <tr class="fw-bold" style="background-color: #f8f9fa;">
                                 <td>
-                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" data-bs-toggle="collapse" data-bs-target="#details-{{ req.id }}">
+                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" aria-expanded="false" data-bs-toggle="collapse" data-bs-target="#details-{{ req.id }}">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-plus-circle-fill icon-plus" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3v-3z"/></svg>
                                         <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-dash-circle-fill icon-minus" viewBox="0 0 16 16" style="color: #dc3545;"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7z"/></svg>
                                     </button>
@@ -141,12 +144,12 @@
                                                 <tbody>
                                                     {% for sys in req.requested_systems.all %}
                                                         {% if sys.sysadmin_status == 'pending' %}
-                                                        <tr>
+                                                        <tr data-system-id="{{ sys.id }}">
                                                             <td>{{ sys.get_system_display }}</td>
                                                             <td>{{ sys.level_of_access }}</td>
                                                             <td>
                                                                 <div class="dropdown">
-                                                                    <button class="btn btn-sm btn-dark dropdown-toggle" type="button" 
+                                                                    <button class="btn btn-sm btn-dark dropdown-toggle btn-dropdown-toggle" type="button" 
                                                                             data-bs-toggle="dropdown" 
                                                                             data-bs-boundary="viewport" 
                                                                             data-bs-auto-close="outside">
@@ -203,7 +206,7 @@
                         {% for req in history %}
                             <tr class="fw-bold" style="background-color: #e2e3e5;">
                                 <td>
-                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" data-bs-toggle="collapse" data-bs-target="#hist-{{ req.id }}">
+                                    <button class="btn btn-icon-clean btn-toggle-details" type="button" aria-expanded="false" data-bs-toggle="collapse" data-bs-target="#hist-{{ req.id }}">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-plus-circle-fill icon-plus" viewBox="0 0 16 16"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8.5 4.5a.5.5 0 0 0-1 0v3h-3a.5.5 0 0 0 0 1h3v3a.5.5 0 0 0 1 0v-3h3a.5.5 0 0 0 0-1h-3v-3z"/></svg>
                                         <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="currentColor" class="bi bi-dash-circle-fill icon-minus" viewBox="0 0 16 16" style="color: #dc3545;"><path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM4.5 7.5a.5.5 0 0 0 0 1h7a.5.5 0 0 0 0-1h-7z"/></svg>
                                     </button>
@@ -262,7 +265,270 @@
         document.getElementById('id_active_tab').value = tabName;
     }
 
+    // ✨ AJAX Notification Helper
+    function showNotification(message, type) {
+        const alertClass = type === 'success' ? 'alert-success' : 'alert-danger';
+        const alertDiv = document.createElement('div');
+        alertDiv.className = `alert ${alertClass} alert-dismissible fade show`;
+        alertDiv.setAttribute('role', 'alert');
+        alertDiv.innerHTML = `
+            ${message}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        `;
+        document.body.insertAdjacentElement('afterbegin', alertDiv);
+        setTimeout(() => alertDiv.remove(), 5000);
+    }
+
+    // ✨ AJAX Form Submission
+    function initializeAjaxForms() {
+        // More robust selector - matches forms within decision dropdowns
+        const forms = document.querySelectorAll('form[method="post"]');
+        console.log(`Found ${forms.length} total POST forms, filtering for system-admin...`);
+        
+        let ajaxyCount = 0;
+        forms.forEach((form, index) => {
+            const action = form.getAttribute('action');
+            if (action && action.includes('/system-admin/')) {
+                console.log(`[AJAX-${++ajaxyCount}] Attaching handler to form with action: ${action}`);
+                form.addEventListener("submit", function(e) {
+                    e.preventDefault();
+                    console.log("AJAX form submission intercepted!");
+                    
+                    const formData = new FormData(this);
+                    const actionVal = formData.get('action');
+                    const comment = formData.get('comment');
+                    const url = this.getAttribute('action');
+                    const csrfToken = this.querySelector('[name="csrfmiddlewaretoken"]').value;
+                    
+                    // Validate reject requires comment
+                    if (actionVal === 'reject' && !comment.trim()) {
+                        showNotification("Please provide a reason for rejection", "error");
+                        return;
+                    }
+                    
+                    // Send AJAX request
+                    fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'X-Requested-With': 'XMLHttpRequest',
+                            'X-CSRFToken': csrfToken
+                        },
+                        body: formData
+                    })
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`HTTP error! status: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(data => {
+                        if (data.success) {
+                            showNotification(data.message, 'success');
+                            
+                            // Find the table row for this system and update it
+                            const systemId = data.system_id;
+                            const row = document.querySelector(`tr[data-system-id="${systemId}"]`);
+                            
+                            if (row) {
+                                // In the pending table, columns are: System (0), Access Level (1), Action (2)
+                                const cells = row.querySelectorAll('td');
+                                
+                                // Hide the action dropdown button
+                                const actionCell = cells[2];
+                                const dropdownBtn = actionCell.querySelector('.btn-dropdown-toggle');
+                                if (dropdownBtn) {
+                                    dropdownBtn.style.display = 'none';
+                                    // Replace button with status badge
+                                    dropdownBtn.insertAdjacentHTML('afterend', `<span class="badge ${data.badge_class}">${data.status}</span>`);
+                                }
+                                
+                                // Close the dropdown
+                                const dropdown = this.closest('.dropdown-menu');
+                                if (dropdown) {
+                                    const dropdownToggle = dropdown.previousElementSibling;
+                                    if (dropdownToggle && dropdownToggle.classList.contains('dropdown-toggle')) {
+                                        const dropdownInstance = bootstrap.Dropdown.getInstance(dropdownToggle);
+                                        if (dropdownInstance) dropdownInstance.hide();
+                                    }
+                                }
+                                
+                                // Visual feedback
+                                row.style.backgroundColor = '#e8f5e9';
+                                setTimeout(() => {
+                                    row.style.opacity = '0.7';
+                                }, 500);
+                            }
+                        } else {
+                            showNotification(data.error || "An error occurred", "error");
+                        }
+                    })
+                    .catch(error => {
+                        console.error("Error:", error);
+                        showNotification("Failed to process decision. Please try again.", "error");
+                    });
+                });
+            }
+        });
+    }
+
+    // ✨ SIMPLIFIED AJAX Form Handler - Direct Approach
+    function initializeFormHandlers() {
+        console.log("📢 [INIT] Starting form handler initialization");
+        
+        // Use global selector - get ALL forms first
+        const allForms = document.querySelectorAll('form');
+        console.log(`📊 [INIT] Total forms on page: ${allForms.length}`);
+        
+        let systemAdminFormCount = 0;
+        
+        allForms.forEach((form, idx) => {
+            const actionUrl = form.getAttribute('action');
+            console.log(`   Form ${idx}: action="${actionUrl}"`);
+            
+            // Check if this is a system admin decision form
+            if (actionUrl && actionUrl.includes('/system-admin/decision/')) {
+                // Check if already attached (prevent double listeners)
+                if (form.dataset.ajaxAttached === 'true') {
+                    console.log(`   ⏭️ Already attached, skipping`);
+                    return;
+                }
+                
+                systemAdminFormCount++;
+                form.dataset.ajaxAttached = 'true';
+                console.log(`✅ [FORM-${systemAdminFormCount}] System admin form detected`);
+                
+                // Add listener directly
+                form.addEventListener('submit', handleSystemAdminDecision);
+            }
+        });
+        
+        console.log(`✅ [INIT] Attached handlers to ${systemAdminFormCount} decision forms\n`);
+    }
+
+    // Dedicated handler function
+    function handleSystemAdminDecision(event) {
+        event.preventDefault();
+        console.log(`🔵 [SUBMIT] Form submitted`);
+        
+        const form = event.target;
+        const action = form.querySelector('[name="action"]').value;
+        const comment = form.querySelector('[name="comment"]').value;
+        const url = form.getAttribute('action');
+        
+        console.log(`   Action: ${action}`);
+        console.log(`   Comment: "${comment}"`);
+        console.log(`   URL: ${url}`);
+        console.log(`   Form method: ${form.getAttribute('method')}`);
+        console.log(`   Form has CSRF: ${!!form.querySelector('[name="csrfmiddlewaretoken"]')}`);
+        
+        // Validation
+        if (action === 'reject' && !comment.trim()) {
+            console.warn(`   ⚠️ Reject without comment`);
+            showNotification("⚠️ Please provide a reason for rejection", "error");
+            return;
+        }
+        
+        // Show loading state
+        const submitBtn = form.querySelector('button[type="submit"]');
+        const originalText = submitBtn.textContent;
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Processing...';
+        
+        // Build FormData
+        const formData = new FormData(form);
+        console.log(`📤 [FETCH] Payload size: ${new Blob(Object.entries(formData)).size} bytes`);
+        console.log(`📤 [FETCH] Request URL: ${url}`);
+        
+        // Send request
+        fetch(url, {
+            method: 'POST',
+            body: formData,
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            credentials: 'same-origin'
+        })
+        .then(response => {
+            console.log(`📥 [RESPONSE] HTTP Status: ${response.status}`);
+            console.log(`📥 [RESPONSE] Content-Type: ${response.headers.get('content-type')}`);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+            }
+            
+            // Try to parse as JSON
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                throw new Error(`Expected JSON, got: ${contentType}`);
+            }
+            
+            return response.json();
+        })
+        .then(data => {
+            console.log(`✨ [SUCCESS] Response data:`, data);
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+            
+            if (data.success) {
+                // Show success notification
+                showNotification(`✅ ${data.message}`, 'success');
+                
+                // Find and remove the row
+                const systemRow = document.querySelector(`tr[data-system-id="${data.system_id}"]`);
+                if (systemRow) {
+                    console.log(`🗑️ [ROW] Found row, removing...`);
+                    systemRow.style.opacity = '0';
+                    systemRow.style.transition = 'opacity 0.3s';
+                    setTimeout(() => {
+                        systemRow.remove();
+                        console.log(`🗑️ [ROW] Removed successfully`);
+                    }, 300);
+                } else {
+                    console.warn(`⚠️ [ROW] Not found for data-system-id="${data.system_id}"`);
+                    console.log(`   Available rows:`, document.querySelectorAll('tr[data-system-id]'));
+                }
+            } else {
+                console.error(`❌ [RESPONSE] Error from server:`, data.error);
+                showNotification(`❌ ${data.error || 'Unknown error'}`, 'error');
+            }
+        })
+        .catch(error => {
+            console.error(`❌ [ERROR] Fetch failed:`, error);
+            console.error(`   Error message: ${error.message}`);
+            console.error(`   Error stack:`, error.stack);
+            submitBtn.disabled = false;
+            submitBtn.textContent = originalText;
+            showNotification(`⚠️ Error: ${error.message}`, 'error');
+        });
+    }
+
     document.addEventListener("DOMContentLoaded", function() {
+        console.log("🎯 [DOMContentLoaded] Page loaded");
+        
+        // Initialize form handlers
+        initializeFormHandlers();
+        
+        // Watch for new forms being added (e.g., when collapse is opened)
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach(mutation => {
+                if (mutation.type === 'childList') {
+                    const newForms = mutation.target.querySelectorAll('form[action*="/system-admin/decision/"]');
+                    if (newForms.length > 0) {
+                        console.log("🔍 [OBSERVER] New forms detected, re-initializing...");
+                        initializeFormHandlers();
+                    }
+                }
+            });
+        });
+        
+        observer.observe(document.body, { 
+            childList: true, 
+            subtree: true 
+        });
+        
+        console.log("👁️ [OBSERVER] MutationObserver active\n");
+
+        // Setup decision select handlers (show/hide comment section)
         const selects = document.querySelectorAll(".decision-select");
         selects.forEach(select => {
             select.addEventListener("change", function() {
