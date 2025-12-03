@@ -1,0 +1,26 @@
+# Core framework
+Django==5.0.4
+
+# Database support (MySQL example — adjust if using SQLite or PostgreSQL)
+mysqlclient==2.2.4
+
+# Email sending and environment variable handling
+python-dotenv==1.0.1
+
+# Excel / CSV / PDF export
+pandas==2.2.2
+openpyxl==3.1.5
+reportlab==4.1.0
+
+# Date/time utilities
+pytz==2024.1
+tzdata==2024.1
+
+# HTTP requests and API utilities (optional, for integrations)
+requests==2.32.3
+
+# Gunicorn (for production WSGI server, if deploying)
+gunicorn==21.2.0
+
+# Optional for static files in production (e.g., Heroku or Render)
+whitenoise==6.6.0
