@@ -274,7 +274,45 @@ def hod_system_decision(request, system_id):
         sync_request_status(request_obj)
         request_obj.save()
 
-        # Email Logic (Keep existing)
+        # --- BUNDLED EMAIL LOGIC (HOD) ---
+        # Check if there are any other systems for this request that are still pending HOD action
+        pending_hod = request_obj.requested_systems.filter(hod_status="pending").exists()
+        
+        if not pending_hod:
+            # ALL systems have been processed by HOD. Send Bundle Email.
+            
+            # 1. Email to ICT Team
+            approved_systems = request_obj.requested_systems.filter(hod_status="approved")
+            if approved_systems.exists():
+                system_list = "\n".join([f"- {s.get_system_display()}" for s in approved_systems])
+                send_mail(
+                    subject=f"[TSC] New Approved Systems for {request_obj.requester.full_name}",
+                    message=f"The following systems have been approved by HOD and are ready for ICT review:\n\n"
+                            f"Requester: {request_obj.requester.full_name} ({request_obj.tsc_no})\n"
+                            f"Directorate: {request_obj.directorate.name if request_obj.directorate else '-'}\n\n"
+                            f"Systems:\n{system_list}\n\n"
+                            f"Please log in to the ICT Dashboard to action these requests.",
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[settings.ICT_TEAM_EMAIL] if settings.ICT_TEAM_EMAIL else [],
+                    fail_silently=True,
+                )
+
+            # 2. Email to Requester (Summary)
+            all_systems = request_obj.requested_systems.all()
+            summary_list = "\n".join([f"- {s.get_system_display()}: {s.hod_status.upper()}" for s in all_systems])
+            
+            send_mail(
+                subject='[TSC] HOD Review Complete - System Access Request',
+                message=f"Dear {request_obj.requester.get_full_name()},\n\n"
+                        f"Your HOD has completed the review of your system access request.\n\n"
+                        f"Summary:\n{summary_list}\n\n"
+                        f"Approved systems have been forwarded to ICT for further processing.\n\n"
+                        f"Regards,\nTSC System Access",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[request_obj.email],
+                fail_silently=True,
+            )
+
         pending = request_obj.requested_systems.filter(hod_status="pending").exists()
         if not pending:
             # ... (Keep existing email code) ...
@@ -436,8 +474,30 @@ def ict_system_decision(request, system_id):
         sync_request_status(request_obj)
         request_obj.save()
 
-        # Email Logic (Keep existing)
-        # ...
+        # --- BUNDLED EMAIL LOGIC (ICT) ---
+        # Check if there are any other systems for this request that are still pending ICT action
+        pending_ict = request_obj.requested_systems.filter(ict_status="pending").exists()
+
+        if not pending_ict:
+            # ALL systems have been processed by ICT. Send Bundle Email.
+            
+            # 1. Email to Requester (Final Summary)
+            all_systems = request_obj.requested_systems.all()
+            summary_list = "\n".join([f"- {s.get_system_display()}: {s.ict_status.upper()}" for s in all_systems])
+            
+            send_mail(
+                subject='[TSC] ICT Review Complete - System Access Request',
+                message=f"Dear {request_obj.requester.get_full_name()},\n\n"
+                        f"The ICT Team has completed the review of your system access request.\n\n"
+                        f"Summary:\n{summary_list}\n\n"
+                        f"Approved systems have been forwarded to the respective System Administrators for provisioning.\n\n"
+                        f"Regards,\nTSC ICT Team",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[request_obj.email],
+                fail_silently=True,
+            )
+
+
 
         # ✅ FIX: Redirect with Preserved Filters
         base_url = reverse('ict_dashboard')
