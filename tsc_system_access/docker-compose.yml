@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   db:
     image: mysql:8
@@ -8,12 +6,19 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: 1234
       MYSQL_DATABASE: tsc_access_db
-      MYSQL_USER: 
-      MYSQL_PASSWORD: 1234
+      # MYSQL_USER/PASSWORD are optional if using root, but good practice to define if needed.
+      # Leaving them out for now to match simple root setup, or defining a separate user.
+      # If you want a specific user:
+      # MYSQL_USER: tsc_user
+      # MYSQL_PASSWORD: tsc_password
     ports:
       - "3308:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      timeout: 20s
+      retries: 10
 
   web:
     build: .
@@ -24,12 +29,15 @@ services:
     ports:
       - "8000:8000"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+    # Load environment variables from the .env file
+    env_file:
+      - .env
     environment:
-      DB_HOST: db
-      DB_NAME: tsc_access_db
-      DB_USER: root
-      DB_PASSWORD: 1234
+      # Override specific variables for Docker networking
+      - DB_HOST=db
+      - DB_PORT=3306
 
 volumes:
   mysql_data:
