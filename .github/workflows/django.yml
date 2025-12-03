@@ -30,7 +30,8 @@ jobs:
 
       - name: Run Django Tests
         env:
-          DJANGO_SETTINGS_MODULE: yourproject.settings   # Optional but recommended
+          DJANGO_SETTINGS_MODULE: tsc_system_access.settings
+        working-directory: ./tsc_system_access
         run: |
           python manage.py migrate
           python manage.py test
