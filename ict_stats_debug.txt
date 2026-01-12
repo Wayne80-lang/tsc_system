@@ -1,0 +1,5 @@
+ICT Stats Calc at 2026-01-12 11:58:16.390063+00:00
+Pending QS Count (Sys): 5
+Pending QS Count (Req): 2
+History QS Count (Sys): 51
+History QS Count (Req): 19

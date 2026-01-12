@@ -30,30 +30,32 @@ from .forms import AccessRequestForm
 def sync_request_status(request_obj):
     all_systems = request_obj.requested_systems.all()
     
-    hod_pending = all_systems.filter(hod_status='pending').exists()
-    if hod_pending:
-        request_obj.status = 'pending_hod'
+    # 1. PENDING: If ANY system is pending at ANY stage
+    if all_systems.filter(Q(hod_status='pending') | Q(ict_status='pending') | Q(sysadmin_status='pending')).exists():
+        # Determine strict stage for visibility
+        if all_systems.filter(hod_status='pending').exists():
+            request_obj.status = 'pending_hod'
+        elif all_systems.filter(ict_status='pending').exists():
+            request_obj.status = 'pending_ict'
+        else:
+            request_obj.status = 'pending_sysadmin'
         request_obj.save()
         return
 
-    hod_approved_exists = all_systems.filter(hod_status='approved').exists()
-    if not hod_approved_exists:
-        request_obj.status = 'rejected_hod'
-        request_obj.save()
-        return
-
-    ict_pending = all_systems.filter(hod_status='approved', ict_status='pending').exists()
-    if ict_pending:
-        request_obj.status = 'pending_ict'
-        request_obj.save()
-        return
-
-    ict_approved_exists = all_systems.filter(ict_status='approved').exists()
-    if ict_approved_exists:
+    # 2. ACTIVE (Approved): If NO system is pending, and AT LEAST ONE is approved
+    if all_systems.filter(sysadmin_status='approved').exists():
         request_obj.status = 'approved'
-    else:
-        request_obj.status = 'rejected_ict'
-    
+        request_obj.save()
+        return
+
+    # 3. REVOKED (Complete): If NO system is pending/active, but AT LEAST ONE is revoked
+    if all_systems.filter(sysadmin_status='revoked').exists():
+        request_obj.status = 'revoked'
+        request_obj.save()
+        return
+
+    # 4. REJECTED: ...
+    request_obj.status = 'rejected_ict' # Default to rejected (or rejected_sysadmin)
     request_obj.save()
 
 # --- VIEWS ---

@@ -16,6 +16,7 @@ class AccessRequest(models.Model):
     STATUS_CHOICES = [
         ('pending_hod', 'Pending HOD'), ('rejected_hod', 'Rejected HOD'),
         ('pending_ict', 'Pending ICT'), ('rejected_ict', 'Rejected ICT'),
+        ('pending_sysadmin', 'Pending System Admin'), ('rejected_sysadmin', 'Rejected System Admin'),
         ('approved', 'Approved'), ('revoked', 'Access Revoked')
     ]
     requester = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
@@ -66,18 +67,46 @@ class SystemAnalytics(AccessRequest):
         verbose_name = "📊 System Dashboard"
         verbose_name_plural = "📊 System Dashboard"
 
-class AccessLog(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    action = models.CharField(max_length=50, default="Login")
+class AuditLog(models.Model):
+    STATUS_CHOICES = [('success', 'Success'), ('failure', 'Failure'), ('warning', 'Warning')]
+    
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+    action = models.CharField(max_length=255)
+    target = models.CharField(max_length=255, blank=True, null=True, help_text="Object being acted upon (e.g. REQ-100)")
     ip_address = models.GenericIPAddressField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='success')
     timestamp = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        verbose_name = "User Access Log"
-        verbose_name_plural = "User Access Logs"
+        verbose_name = "Audit Log"
+        verbose_name_plural = "Audit Logs"
+        ordering = ['-timestamp']
 
     def __str__(self):
-        return f"{self.user.full_name} ({self.action})"
+        return f"{self.user} - {self.action}"
+
+class SecurityPolicy(models.Model):
+    key = models.CharField(max_length=50, unique=True)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    is_enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+
+    def __str__(self):
+        return f"{self.name} ({'On' if self.is_enabled else 'Off'})"
+
+class GlobalSettings(models.Model):
+    GROUP_CHOICES = [('general', 'General'), ('notification', 'Notification'), ('maintenance', 'Maintenance')]
+    
+    key = models.CharField(max_length=50, unique=True)
+    label = models.CharField(max_length=100)
+    value = models.TextField(blank=True)
+    group = models.CharField(max_length=20, choices=GROUP_CHOICES, default='general')
+    is_public = models.BooleanField(default=False) # e.g. system name might be public
+
+    def __str__(self):
+        return f"{self.key}: {self.value}"
 
 class CustomUserManager(BaseUserManager):
     def create_user(self, tsc_no, password=None, **extra_fields):
@@ -138,7 +167,7 @@ class UserRole(models.Model):
     
     def get_system_assigned_display(self):
         if self.system_assigned:
-            return dict(RequestedSystem.SYSTEM_CHOICES).get(self.system_assigned, self.system_assigned)
+            return dict(RequestedSystem.SYSTEM_CHOICES).get(str(self.system_assigned), self.system_assigned)
         return "-"
     
     class Meta:

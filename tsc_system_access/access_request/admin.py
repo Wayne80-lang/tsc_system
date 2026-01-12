@@ -24,7 +24,7 @@ from .forms import CustomUserChangeForm, CustomUserCreationForm
 
 from .models import (
     CustomUser, UserRole, Directorate, 
-    RequestedSystem, AccessRequest, SystemAnalytics, AccessLog
+    RequestedSystem, AccessRequest, SystemAnalytics, AuditLog
 )
 
 # ==========================================
@@ -238,11 +238,11 @@ class AuditLogAdmin(admin.ModelAdmin):
 
 
 # ✅ 2. ACCESS LOG ADMIN (Login History)
-@admin.register(AccessLog)
-class AccessLogAdmin(admin.ModelAdmin):
-    list_display = ('user', 'action', 'timestamp', 'ip_address')
-    list_filter = ('action', 'timestamp')
-    search_fields = ('user__full_name', 'user__tsc_no', 'ip_address')
+@admin.register(AuditLog)
+class AuditLogAdmin(admin.ModelAdmin):
+    list_display = ('user', 'action', 'target', 'status', 'timestamp', 'ip_address')
+    list_filter = ('action', 'status', 'timestamp')
+    search_fields = ('user__full_name', 'user__tsc_no', 'action', 'target', 'ip_address')
     date_hierarchy = 'timestamp'
     
     def has_add_permission(self, request): return False
@@ -275,7 +275,7 @@ class SystemAnalyticsAdmin(admin.ModelAdmin):
         granted_rights = [{'name': system_map.get(r['system'], r['system']), 'count': r['count']} for r in raw_rights]
 
         # Recent Logs for the "Tab" view
-        recent_logs = AccessLog.objects.select_related('user').order_by('-timestamp')[:20]
+        recent_logs = AuditLog.objects.select_related('user').order_by('-timestamp')[:20]
 
         # 2. EXPORT EXCEL
         if 'export_excel' in request.GET:

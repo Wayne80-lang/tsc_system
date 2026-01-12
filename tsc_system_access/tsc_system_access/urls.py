@@ -5,6 +5,7 @@ from django.contrib.auth import views as auth_views
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('access/', include('access_request.urls')),  # your app URLs
+    path('api/', include('access_request.api_urls')), # Expose API at root /api/ using dedicated api_urls
 
     # login/logout
     path('accounts/login/', auth_views.LoginView.as_view(template_name='access_request/login.html'), name='login'),

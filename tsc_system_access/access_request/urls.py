@@ -1,7 +1,19 @@
-from django.urls import path
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
 from . import views
+from . import api_views
+from rest_framework.authtoken.views import obtain_auth_token
+
+router = DefaultRouter()
+router.register(r'requests', api_views.AccessRequestViewSet)
+router.register(r'systems', api_views.RequestedSystemViewSet)
+router.register(r'directorates', api_views.DirectorateViewSet)
+router.register(r'users', api_views.UserViewSet)
 
 urlpatterns = [
+    # API paths are now in api_urls.py
+    path('api/token/', obtain_auth_token, name='api_token_auth'), # Keeping for legacy if needed, but intended to use root /api/
+    path('api/', include(router.urls)),
     path('', views.user_home, name='user_home'),
     path('role-redirect/', views.home_redirect, name='home_redirect'),
     path('submit/', views.submit_request, name='submit_request'),
