@@ -1,3 +1,5 @@
+Here is the updated `README.md` file, rewritten to reflect the full-stack architecture (Django Backend + Next.js Frontend) and the modern tech stack found in your project files.
+
 ```markdown
 # TSC System Access
 
